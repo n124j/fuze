@@ -27,8 +27,12 @@ describe("openDb", () => {
         "sessions",
         "owner_identities",
         "pairing",
+        "seen_items",
+        "connector_state",
+        "approvals",
       ]),
     );
+    expect(SCHEMA_VERSION).toBe(2);
     expect(db.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
   });
 

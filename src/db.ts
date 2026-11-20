@@ -77,6 +77,30 @@ const MIGRATIONS: string[] = [
     used INTEGER NOT NULL DEFAULT 0
   );
   `,
+  `
+  CREATE TABLE seen_items (
+    source TEXT NOT NULL,
+    id TEXT NOT NULL,
+    seen_at INTEGER NOT NULL,
+    PRIMARY KEY (source, id)
+  );
+
+  CREATE TABLE connector_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE approvals (
+    id TEXT PRIMARY KEY,
+    draft_id TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    hash TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    decided_at INTEGER
+  );
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
