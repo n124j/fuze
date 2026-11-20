@@ -36,3 +36,16 @@ describe("loadConfig", () => {
     expect(loadConfig({}).anthropicApiKey).toBeUndefined();
   });
 });
+
+describe("loadConfig: apple and slack", () => {
+  it("reads the slack user token and leaves it unset by default", () => {
+    expect(loadConfig({ SLACK_USER_TOKEN: "xoxp-1" }).slackUserToken).toBe("xoxp-1");
+    expect(loadConfig({}).slackUserToken).toBeUndefined();
+  });
+
+  it("enables apple by default and lets the owner turn it off", () => {
+    expect(loadConfig({}).apple).toBe(true);
+    for (const off of ["0", "false", "off", "no", "OFF"]) expect(loadConfig({ FUSE_APPLE: off }).apple).toBe(false);
+    expect(loadConfig({ FUSE_APPLE: "1" }).apple).toBe(true);
+  });
+});

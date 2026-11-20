@@ -11,6 +11,9 @@ export interface Config {
   telegramBotToken?: string;
   googleClientId?: string;
   googleClientSecret?: string;
+  slackUserToken?: string;
+  /** Use Apple Calendar and Reminders when running on a Mac. */
+  apple: boolean;
   /** Lowercased addresses whose mail is always urgent. */
   vipSenders: string[];
   models: { cheap: string; strong: string };
@@ -38,6 +41,8 @@ const schema = z.object({
   telegramBotToken: z.string().optional(),
   googleClientId: z.string().optional(),
   googleClientSecret: z.string().optional(),
+  slackUserToken: z.string().optional(),
+  apple: z.boolean(),
   vipSenders: z.array(z.string()),
   models: z.object({ cheap: z.string().min(1), strong: z.string().min(1) }),
 });
@@ -55,6 +60,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     telegramBotToken: get("TELEGRAM_BOT_TOKEN"),
     googleClientId: get("GOOGLE_CLIENT_ID"),
     googleClientSecret: get("GOOGLE_CLIENT_SECRET"),
+    slackUserToken: get("SLACK_USER_TOKEN"),
+    apple: !["0", "false", "off", "no"].includes((get("FUSE_APPLE") ?? "1").toLowerCase()),
     vipSenders: (get("FUSE_VIP_SENDERS") ?? "")
       .split(",")
       .map((s) => s.trim().toLowerCase())

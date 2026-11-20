@@ -13,6 +13,8 @@ export interface CalEvent {
   allDay: boolean;
   location?: string;
   updated: Date;
+  /** iCalendar UID, shared between calendar apps, used to spot the same event twice. */
+  uid?: string;
 }
 
 interface GoogleEvent {
@@ -22,6 +24,7 @@ interface GoogleEvent {
   end: { dateTime?: string; date?: string };
   location?: string;
   updated?: string;
+  iCalUID?: string;
 }
 
 const when = (t: { dateTime?: string; date?: string }): Date => new Date(t.dateTime ?? `${t.date}T00:00:00Z`);
@@ -35,6 +38,7 @@ function toEvent(g: GoogleEvent): CalEvent {
     allDay: !g.start.dateTime,
     location: g.location,
     updated: new Date(g.updated ?? 0),
+    uid: g.iCalUID,
   };
 }
 

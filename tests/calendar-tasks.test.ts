@@ -150,3 +150,17 @@ describe("TasksClient", () => {
     expect(t.due).toEqual(new Date("2026-12-01T00:00:00Z"));
   });
 });
+
+describe("CalendarClient event uid", () => {
+  it("maps Google's iCalUID to uid", async () => {
+    const { http } = fakeHttp(() => ({
+      items: [
+        { id: "a", summary: "A", iCalUID: "abc@google.com", start: { dateTime: "2026-11-20T14:00:00Z" }, end: { dateTime: "2026-11-20T15:00:00Z" } },
+        { id: "b", summary: "B", start: { dateTime: "2026-11-20T16:00:00Z" }, end: { dateTime: "2026-11-20T17:00:00Z" } },
+      ],
+    }));
+    const events = await new CalendarClient(http, openDb(":memory:")).listBetween(new Date(0), new Date(1));
+    expect(events[0]!.uid).toBe("abc@google.com");
+    expect(events[1]!.uid).toBeUndefined();
+  });
+});
