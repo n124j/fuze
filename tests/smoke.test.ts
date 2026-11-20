@@ -80,6 +80,7 @@ async function setup(
   env: Record<string, string> = {},
   extraHandlers: Record<string, Handler> = {},
   google?: any,
+  extra: { apple?: any; slack?: any } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "fuse-smoke-"));
   dirs.push(dir);
@@ -93,6 +94,8 @@ async function setup(
     clock: () => now,
     extraHandlers,
     google,
+    apple: extra.apple,
+    slack: extra.slack,
   });
   app.owners.setOwner("telegram", "42", "42");
   await app.gateway.start();
@@ -350,5 +353,73 @@ describe("google: polling and briefing", () => {
     expect(app.queue.get(id)?.status).toBe("done");
     expect(llm.calls).toHaveLength(1);
     expect(adapter.sent.at(-1)!.text).toContain("Pay rent");
+  });
+});
+
+describe("apple and slack", () => {
+  const sync = { id: "g1", uid: "u1", title: "Sync", start: new Date("2026-11-20T14:00:00Z"), end: new Date("2026-11-20T14:30:00Z"), allDay: false, updated: new Date(0) };
+  const fakeApple = (events: any[] = []) => ({
+    calendar: { listBetween: vi.fn(async () => events) },
+    reminders: { listOpen: vi.fn(async () => [] as any[]), create: vi.fn() },
+  });
+  const slackItem = { key: "D1:1800000100.0", kind: "dm", from: "sam", where: "direct message", text: "hi there", ts: 1800000100 };
+  const fakeSlack = () => ({ client: { findNew: vi.fn(async () => [] as any[]), search: vi.fn(async () => []) }, userId: "U_ME" });
+
+  it("announces an event that is in both Google and Apple Calendar once", async () => {
+    const google = fakeGoogle();
+    google.calendar.listBetween.mockResolvedValue([sync]);
+    const apple = fakeApple([{ ...sync, id: "apple:u1" }]);
+    const { app, adapter } = await setup([], {}, {}, google, { apple });
+    app.queue.enqueue("poll", {});
+    await app.worker.tick();
+    expect(adapter.sent.filter((s) => s.text.includes("Sync starts in"))).toHaveLength(1);
+  });
+
+  it("still polls Google when Apple Calendar fails", async () => {
+    const google = fakeGoogle();
+    google.calendar.listBetween.mockResolvedValue([sync]);
+    const apple = fakeApple();
+    apple.calendar.listBetween.mockRejectedValue(new Error("osascript timed out"));
+    const { app, adapter } = await setup([], {}, {}, google, { apple });
+    app.queue.enqueue("poll", {});
+    await app.worker.tick();
+    expect(adapter.sent.some((s) => s.text.includes("Sync starts in"))).toBe(true);
+  });
+
+  it("delivers a Slack direct message once", async () => {
+    const slack = fakeSlack();
+    const { app, adapter } = await setup([], {}, {}, undefined, { slack });
+    app.queue.enqueue("poll", {});
+    await app.worker.tick(); // first poll only records the starting point
+    slack.client.findNew.mockResolvedValue([slackItem]);
+    app.queue.enqueue("poll", {});
+    await app.worker.tick();
+    app.queue.enqueue("poll", {});
+    await app.worker.tick();
+    expect(adapter.sent.map((s) => s.text)).toEqual(["Slack DM from sam: hi there"]);
+  });
+
+  it("keeps the calendar poll going when Slack is rate limited, and retries the job", async () => {
+    const google = fakeGoogle();
+    google.calendar.listBetween.mockResolvedValue([sync]);
+    const slack = fakeSlack();
+    const { SlackApiError } = await import("../src/slack/client.js");
+    slack.client.findNew.mockRejectedValue(new SlackApiError("slow down", 429, "ratelimited"));
+    const { app, adapter } = await setup([], {}, {}, google, { slack });
+    app.queue.enqueue("poll", {});
+    await app.worker.tick(); // slack baseline
+    const id = app.queue.enqueue("poll", {});
+    await app.worker.tick();
+    expect(adapter.sent.some((s) => s.text.includes("Sync starts in"))).toBe(true);
+    expect(app.queue.get(id)!.status).not.toBe("done");
+  });
+
+  it("registers reminder and slack tools only when those connectors exist", async () => {
+    const bare = await setup([]);
+    const names = (a: { app: App }) => a.app.tools.specs().map((t) => t.name);
+    expect(names(bare)).not.toContain("reminders_create");
+    expect(names(bare)).not.toContain("slack_search");
+    const full = await setup([], {}, {}, undefined, { apple: fakeApple(), slack: fakeSlack() });
+    expect(names(full)).toEqual(expect.arrayContaining(["reminders_list", "reminders_create", "slack_search"]));
   });
 });

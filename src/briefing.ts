@@ -1,13 +1,15 @@
 import type { ApprovalGate } from "./approvals/gate.js";
 import type { BudgetGuard } from "./budget/guard.js";
 import type { CalendarClient } from "./google/calendar.js";
-import type { TasksClient } from "./google/tasks.js";
+import type { TaskItem, TasksClient } from "./google/tasks.js";
 import { isText, type LlmClient } from "./llm/types.js";
 import { nextLocalTime } from "./time.js";
 
 export interface BriefingDeps {
   calendar: Pick<CalendarClient, "listBetween">;
   tasks: Pick<TasksClient, "listOpen">;
+  /** Apple Reminders (Mac only); shown when due today or overdue. */
+  reminders?: { listOpen(): Promise<TaskItem[]> };
   approvals: Pick<ApprovalGate, "pending">;
   llm: LlmClient;
   budget: BudgetGuard;
@@ -57,6 +59,20 @@ export async function composeBriefing(deps: BriefingDeps, digest: string[]): Pro
     }
   } catch {
     notes.push("I couldn't reach Google Tasks this morning, so your task list is missing.");
+  }
+
+  if (deps.reminders) {
+    try {
+      const endOfToday = nextLocalTime(now, deps.tz, "00:00");
+      const due = (await deps.reminders.listOpen()).filter((r) => r.due !== undefined && r.due < endOfToday);
+      if (due.length > 0) {
+        const shown = due.slice(0, MAX_TASKS).map((r) => `- ${r.title}${r.due! < now ? " (overdue)" : ` (due ${clock(r.due!, deps.tz)})`}`);
+        if (due.length > MAX_TASKS) shown.push(`- and ${due.length - MAX_TASKS} more`);
+        sections.push("Reminders:\n" + shown.join("\n"));
+      }
+    } catch {
+      notes.push("I couldn't reach Apple Reminders this morning, so your reminders are missing.");
+    }
   }
 
   if (digest.length > 0) sections.push("Overnight:\n" + digest.map((d) => `• ${d}`).join("\n"));

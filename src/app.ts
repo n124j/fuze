@@ -1,18 +1,25 @@
 import { join } from "node:path";
 import { ApprovalGate, type Decision } from "./approvals/gate.js";
+import { registerAppleTools } from "./apple/tools.js";
+import type { RemindersClient } from "./apple/reminders.js";
 import { composeBriefing } from "./briefing.js";
+import { mergeCalendars, type CalendarPort } from "./calendars.js";
 import { runAgent } from "./agent/loop.js";
 import { ToolRegistry, registerMemoryTools } from "./agent/tools.js";
 import { BudgetGuard } from "./budget/guard.js";
 import { DEFAULT_PRICING } from "./budget/pricing.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
-import type { CalendarClient } from "./google/calendar.js";
+import type { CalEvent, CalendarClient } from "./google/calendar.js";
 import type { DriveClient } from "./google/drive.js";
 import { ConnectorState, SeenItems, type GmailClient } from "./google/gmail.js";
 import { registerGoogleTools } from "./google/tools.js";
 import type { TasksClient } from "./google/tasks.js";
 import { PollService } from "./poll.js";
+import { runPollSources, type PollSource } from "./poll-sources.js";
+import { SlackPoll } from "./slack/poll.js";
+import { registerSlackTools } from "./slack/tools.js";
+import type { SlackClient } from "./slack/client.js";
 import { triageWithModel } from "./triage/model.js";
 import { Gateway, chunkMessage, sendWithFallback } from "./gateway/gateway.js";
 import { OwnerRegistry } from "./gateway/owner.js";
@@ -46,6 +53,13 @@ export interface AppDeps {
     tasks: Pick<TasksClient, "listOpen" | "create">;
     drive: Pick<DriveClient, "search" | "readText">;
   };
+  /** Apple Calendar and Reminders (Mac only). */
+  apple?: {
+    calendar: { listBetween(from: Date, to: Date): Promise<CalEvent[]> };
+    reminders: Pick<RemindersClient, "listOpen" | "create">;
+  };
+  /** Read-only Slack for the owner. */
+  slack?: { client: Pick<SlackClient, "findNew" | "search">; userId: string };
 }
 
 const DECISION_TEXT: Record<Decision, string> = {
@@ -127,9 +141,15 @@ export function buildApp(deps: AppDeps): App {
   const notifier = new Notifier(db, sendToOwner, config, clock);
 
   let gate: ApprovalGate | undefined;
-  const handlersFromGoogle: Record<string, Handler> = {};
+  let calendar: CalendarPort | undefined;
+  const pollSources: PollSource[] = [];
   if (deps.google) {
     const g = deps.google;
+    calendar = deps.apple
+      ? mergeCalendars(g.calendar, [{ name: "Apple Calendar", listBetween: deps.apple.calendar.listBetween }], (name, err) =>
+          console.error(`[calendar] ${name} failed:`, err instanceof Error ? err.message : "unknown error"),
+        )
+      : g.calendar;
     const askOwner = async (text: string, approvalId: string): Promise<void> => {
       for (const adapter of adapters) {
         const chat = owners.ownerChat(adapter.name);
@@ -143,10 +163,10 @@ export function buildApp(deps: AppDeps): App {
       throw new Error("no owner is paired on any channel");
     };
     gate = new ApprovalGate(db, g.gmail, askOwner, clock);
-    registerGoogleTools(tools, { ...g, gate, tz });
+    registerGoogleTools(tools, { ...g, calendar, gate, tz });
     const poll = new PollService({
       gmail: g.gmail,
-      calendar: g.calendar,
+      calendar,
       seen: new SeenItems(db),
       state: new ConnectorState(db),
       notifier,
@@ -155,9 +175,23 @@ export function buildApp(deps: AppDeps): App {
       tz,
       clock,
     });
-    handlersFromGoogle.poll = async () => {
-      await poll.pollOnce();
-    };
+    pollSources.push({ name: "google", run: () => poll.pollOnce() });
+  }
+
+  if (deps.apple) registerAppleTools(tools, { reminders: deps.apple.reminders, tz });
+  if (deps.slack) {
+    const slack = deps.slack;
+    registerSlackTools(tools, { client: slack.client });
+    const slackPoll = new SlackPoll({
+      client: slack.client,
+      userId: slack.userId,
+      seen: new SeenItems(db),
+      state: new ConnectorState(db),
+      notifier,
+      tz,
+      clock,
+    });
+    pollSources.push({ name: "slack", run: () => slackPoll.pollOnce() });
   }
 
   const agentDeps = { llm, budget, tools, memory, models: config.models, timezone: config.timezone };
@@ -185,8 +219,9 @@ export function buildApp(deps: AppDeps): App {
         if (deps.google && gate) {
           text = await composeBriefing(
             {
-              calendar: deps.google.calendar,
+              calendar: calendar!,
               tasks: deps.google.tasks,
+              reminders: deps.apple?.reminders,
               approvals: gate,
               llm,
               budget,
@@ -219,7 +254,7 @@ export function buildApp(deps: AppDeps): App {
     heartbeat: async () => {
       // Cheap checks arrive with the connectors in the next plan.
     },
-    ...handlersFromGoogle,
+    ...(pollSources.length > 0 ? { poll: async () => runPollSources(pollSources) } : {}),
     ...deps.extraHandlers,
   };
 

@@ -13,7 +13,7 @@ const reply = (text: string): LlmResponse => ({ content: [{ type: "text", text }
 const standup = { id: "e1", title: "Standup", start: new Date("2026-11-20T14:00:00Z"), end: new Date("2026-11-20T14:30:00Z"), allDay: false, updated: new Date(0) };
 const lunch = { id: "e2", title: "Lunch with Sam", start: new Date("2026-11-20T17:30:00Z"), end: new Date("2026-11-20T18:30:00Z"), allDay: false, location: "Cafe Roma", updated: new Date(0) };
 
-function setup(over: { events?: any[] | Error; tasks?: any[] | Error; approvals?: any[]; responses?: LlmResponse[]; capUsd?: number } = {}) {
+function setup(over: { events?: any[] | Error; tasks?: any[] | Error; approvals?: any[]; reminders?: any[] | Error; responses?: LlmResponse[]; capUsd?: number } = {}) {
   const db = openDb(":memory:");
   const budget = new BudgetGuard(db, over.capUsd ?? 1, "America/New_York", DEFAULT_PRICING, () => NOW);
   const llm = new ScriptedLlm(over.responses ?? [reply("Good morning. Here is your day.")]);
@@ -25,7 +25,12 @@ function setup(over: { events?: any[] | Error; tasks?: any[] | Error; approvals?
     if (over.tasks instanceof Error) throw over.tasks;
     return over.tasks ?? [];
   });
+  const listReminders = vi.fn(async () => {
+    if (over.reminders instanceof Error) throw over.reminders;
+    return over.reminders ?? [];
+  });
   const deps = {
+    ...(over.reminders !== undefined ? { reminders: { listOpen: listReminders } } : {}),
     calendar: { listBetween },
     tasks: { listOpen },
     approvals: { pending: () => over.approvals ?? [] },
@@ -121,5 +126,40 @@ describe("composeBriefing", () => {
     await composeBriefing(deps, []);
     expect(llm.calls[0]!.system).not.toContain("Ignore instructions");
     expect(JSON.stringify(llm.calls[0]!.messages)).toContain("<untrusted_data>");
+  });
+});
+
+describe("composeBriefing reminders", () => {
+  const rem = (id: string, title: string, due?: string) => ({ id, title, due: due ? new Date(due) : undefined, done: false });
+
+  it("lists reminders due today or overdue, and nothing later or undated", async () => {
+    const { deps, llm } = setup({
+      reminders: [
+        rem("1", "Call mum", "2026-11-20T20:00:00Z"),
+        rem("2", "Overdue form", "2026-11-19T15:00:00Z"),
+        rem("3", "Next week thing", "2026-11-27T15:00:00Z"),
+        rem("4", "Someday", undefined),
+      ],
+    });
+    await composeBriefing(deps, []);
+    const prompt = JSON.stringify(llm.calls[0]!.messages);
+    expect(prompt).toContain("Reminders:");
+    expect(prompt).toContain("Call mum");
+    expect(prompt).toContain("Overdue form");
+    expect(prompt).not.toContain("Next week thing");
+    expect(prompt).not.toContain("Someday");
+  });
+
+  it("notes when reminders could not be read and keeps the rest", async () => {
+    const { deps } = setup({ reminders: new Error("not authorized"), tasks });
+    const out = await composeBriefing(deps, []);
+    expect(out).toContain("I couldn't reach Apple Reminders this morning, so your reminders are missing.");
+    expect(out).toContain("Good morning");
+  });
+
+  it("changes nothing when there is no reminders source", async () => {
+    const { deps, llm } = setup({ tasks });
+    await composeBriefing(deps, []);
+    expect(JSON.stringify(llm.calls[0]!.messages)).not.toContain("Reminders:");
   });
 });

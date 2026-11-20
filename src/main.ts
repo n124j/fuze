@@ -11,7 +11,11 @@ import { CalendarClient } from "./google/calendar.js";
 import { DriveClient } from "./google/drive.js";
 import { GmailClient } from "./google/gmail.js";
 import { TasksClient } from "./google/tasks.js";
+import { AppleCalendarClient } from "./apple/calendar.js";
+import { checkAppleAccess, createOsascriptRunner } from "./apple/osascript.js";
+import { RemindersClient } from "./apple/reminders.js";
 import { AnthropicLlm } from "./llm/anthropic.js";
+import { SlackClient } from "./slack/client.js";
 
 async function main(): Promise<void> {
   try {
@@ -44,7 +48,30 @@ async function main(): Promise<void> {
     console.log("Google is not connected (see docs/google-setup.md, then run: npm run google-auth)");
   }
 
-  const app = buildApp({ config, db, llm: new AnthropicLlm(config.anthropicApiKey), adapters, google });
+  let apple: Parameters<typeof buildApp>[0]["apple"];
+  if (config.apple && process.platform === "darwin") {
+    const run = createOsascriptRunner();
+    const problem = await checkAppleAccess(run);
+    if (problem) {
+      console.log(problem);
+    } else {
+      apple = { calendar: new AppleCalendarClient(run), reminders: new RemindersClient(run, db) };
+      console.log("Apple Calendar and Reminders connected");
+    }
+  }
+
+  let slack: Parameters<typeof buildApp>[0]["slack"];
+  if (config.slackUserToken) {
+    const client = new SlackClient(config.slackUserToken);
+    try {
+      slack = { client, userId: (await client.whoAmI()).userId };
+      console.log("Slack connected");
+    } catch (err) {
+      console.log(`Slack is not connected: ${err instanceof Error ? err.message : "unknown error"} (see docs/slack-setup.md)`);
+    }
+  }
+
+  const app = buildApp({ config, db, llm: new AnthropicLlm(config.anthropicApiKey), adapters, google, apple, slack });
 
   if (devCli) app.owners.setOwner("cli", "local", "local");
   if (config.telegramBotToken && !app.owners.hasOwner("telegram")) {
