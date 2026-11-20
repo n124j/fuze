@@ -10,6 +10,8 @@ export interface AgentDeps {
   tools: ToolRegistry;
   memory: MemoryStore;
   models: { cheap: string; strong: string };
+  /** Owner's IANA timezone; when set, the prompt states the current local date and time. */
+  timezone?: string;
 }
 
 export interface AgentInput {
@@ -39,7 +41,14 @@ export async function runAgent(
   input: AgentInput,
 ): Promise<{ reply: string; messages: Message[] }> {
   const now = input.now ?? new Date();
-  const system = `${INSTRUCTIONS}\n\n${deps.memory.snapshotForPrompt(now)}`;
+  const clockLine = deps.timezone
+    ? `Current date and time: ${new Intl.DateTimeFormat("en-US", {
+        timeZone: deps.timezone,
+        dateStyle: "full",
+        timeStyle: "short",
+      }).format(now)} (${deps.timezone}). Resolve "today", "tomorrow" and similar yourself; never ask the owner for the date.\n\n`
+    : "";
+  const system = `${INSTRUCTIONS}\n\n${clockLine}${deps.memory.snapshotForPrompt(now)}`;
   const model = deps.models[input.tier];
   const messages: Message[] = [...input.history, { role: "user", content: input.userText }];
 

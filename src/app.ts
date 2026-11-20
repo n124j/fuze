@@ -160,7 +160,7 @@ export function buildApp(deps: AppDeps): App {
     };
   }
 
-  const agentDeps = { llm, budget, tools, memory, models: config.models };
+  const agentDeps = { llm, budget, tools, memory, models: config.models, timezone: config.timezone };
   const respond = async (sessionId: string, userText: string): Promise<string> => {
     const history = loadHistory(db, sessionId);
     // The owner is talking to Fuse directly, so use the strong model; cheap models are for background triage.

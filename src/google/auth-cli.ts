@@ -28,15 +28,17 @@ async function main(): Promise<void> {
       res.writeHead(ok ? 200 : 400, { "Content-Type": "text/plain" });
       res.end(ok ? "Google connected. You can close this tab." : "Sign-in failed. Check the terminal.");
       server.close();
-      if (ok) resolve({ code: url.searchParams.get("code")!, redirect: `http://127.0.0.1:${port()}/callback` });
+      if (ok) resolve({ code: url.searchParams.get("code")!, redirect: `http://127.0.0.1:${port}/callback` });
       else reject(new Error(url.searchParams.get("error") ?? "state mismatch"));
     });
-    const port = () => (server.address() as { port: number }).port;
+    // Read once at startup: after server.close() the address is gone.
+    let port = 0;
     server.listen(0, "127.0.0.1", () => {
+      port = (server.address() as { port: number }).port;
       const auth = new URL("https://accounts.google.com/o/oauth2/v2/auth");
       auth.search = new URLSearchParams({
         client_id: config.googleClientId!,
-        redirect_uri: `http://127.0.0.1:${port()}/callback`,
+        redirect_uri: `http://127.0.0.1:${port}/callback`,
         response_type: "code",
         scope: GOOGLE_SCOPES.join(" "),
         access_type: "offline",

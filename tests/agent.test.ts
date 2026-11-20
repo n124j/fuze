@@ -60,6 +60,15 @@ const input = (over: Partial<{ history: Message[]; userText: string; tier: "chea
 });
 
 describe("runAgent", () => {
+  it("tells the model today's local date and timezone", async () => {
+    const s = setup([text("ok")]);
+    await runAgent({ ...s.deps, timezone: TZ }, input());
+    const system = s.llm.calls[0]!.system;
+    expect(system).toContain("Friday, November 20, 2026");
+    expect(system).toContain("10:00 AM");
+    expect(system).toContain(TZ);
+  });
+
   it("returns the model's text and records usage once", async () => {
     const s = setup([text("Hello there")]);
     const out = await runAgent(s.deps, input());
