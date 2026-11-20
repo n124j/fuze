@@ -1,0 +1,64 @@
+import type { ConnectorState, SeenItems } from "../google/gmail.js";
+import type { Notifier } from "../notify/notifier.js";
+import { localDateKey } from "../time.js";
+import { SlackAuthError, type SlackClient, type SlackItem } from "./client.js";
+
+const STATE_KEY = "slack.lastTs";
+const MAX_TEXT = 200;
+
+export interface SlackPollDeps {
+  client: Pick<SlackClient, "findNew">;
+  userId: string;
+  seen: SeenItems;
+  state: ConnectorState;
+  notifier: Pick<Notifier, "notify">;
+  tz: string;
+  clock: () => Date;
+}
+
+const tidy = (text: string): string => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > MAX_TEXT ? `${flat.slice(0, MAX_TEXT)}...` : flat;
+};
+
+const describe = (i: SlackItem): string =>
+  i.kind === "dm" ? `Slack DM from ${i.from}: ${tidy(i.text)}` : `Slack mention in ${i.where} from ${i.from}: ${tidy(i.text)}`;
+
+/** Checks Slack for new direct messages and mentions and hands each to the notifier once. */
+export class SlackPoll {
+  constructor(private readonly d: SlackPollDeps) {}
+
+  async pollOnce(): Promise<number> {
+    const last = this.d.state.get(STATE_KEY);
+    if (last === null) {
+      // First run: start from now. Old messages are never read or announced.
+      this.d.state.set(STATE_KEY, String(this.d.clock().getTime() / 1000));
+      return 0;
+    }
+    try {
+      const items = await this.d.client.findNew(this.d.userId, Number(last));
+      let count = 0;
+      for (const item of items) {
+        if (!this.d.seen.has("slack", item.key)) {
+          await this.d.notifier.notify({ dedupeKey: `slack:${item.key}`, priority: "normal", text: describe(item) });
+          // Marked only after delivery succeeded, so a failure part-way loses nothing.
+          this.d.seen.markIfNew("slack", item.key);
+          count++;
+        }
+        this.d.state.set(STATE_KEY, String(item.ts));
+      }
+      return count;
+    } catch (err) {
+      if (err instanceof SlackAuthError) {
+        // One message per day, and the job still completes: retrying cannot fix a revoked token.
+        await this.d.notifier.notify({
+          dedupeKey: `slack-auth:${localDateKey(this.d.clock(), this.d.tz)}`,
+          priority: "urgent",
+          text: "Slack needs a new token. See docs/slack-setup.md, then update SLACK_USER_TOKEN and restart Fuse.",
+        });
+        return 0;
+      }
+      throw err;
+    }
+  }
+}
