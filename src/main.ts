@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
 import { CliAdapter } from "./channels/cli.js";
@@ -6,6 +6,11 @@ import { TelegramAdapter } from "./channels/telegram.js";
 import { loadConfig } from "./config.js";
 import { openDb } from "./db.js";
 import type { ChannelAdapter } from "./gateway/types.js";
+import { FileTokenStore, GoogleAuth, GoogleHttp } from "./google/auth.js";
+import { CalendarClient } from "./google/calendar.js";
+import { DriveClient } from "./google/drive.js";
+import { GmailClient } from "./google/gmail.js";
+import { TasksClient } from "./google/tasks.js";
 import { AnthropicLlm } from "./llm/anthropic.js";
 
 async function main(): Promise<void> {
@@ -27,7 +32,19 @@ async function main(): Promise<void> {
 
   mkdirSync(config.dataDir, { recursive: true });
   const db = openDb(join(config.dataDir, "fuse.db"));
-  const app = buildApp({ config, db, llm: new AnthropicLlm(config.anthropicApiKey), adapters });
+
+  let google: Parameters<typeof buildApp>[0]["google"];
+  const tokenPath = join(config.dataDir, "google-token.json");
+  if (config.googleClientId && config.googleClientSecret && existsSync(tokenPath)) {
+    const http = new GoogleHttp(
+      new GoogleAuth({ clientId: config.googleClientId, clientSecret: config.googleClientSecret, store: new FileTokenStore(tokenPath) }),
+    );
+    google = { gmail: new GmailClient(http), calendar: new CalendarClient(http, db), tasks: new TasksClient(http, db), drive: new DriveClient(http) };
+  } else {
+    console.log("Google is not connected (see docs/google-setup.md, then run: npm run google-auth)");
+  }
+
+  const app = buildApp({ config, db, llm: new AnthropicLlm(config.anthropicApiKey), adapters, google });
 
   if (devCli) app.owners.setOwner("cli", "local", "local");
   if (config.telegramBotToken && !app.owners.hasOwner("telegram")) {
