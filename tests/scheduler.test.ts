@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { openDb, type Db } from "../src/db.js";
 import { JobQueue } from "../src/queue/queue.js";
-import { Scheduler, dailyCron } from "../src/scheduler.js";
+import { CONSOLIDATE_CRON, Scheduler, dailyCron } from "../src/scheduler.js";
 
 const cfg = { timezone: "America/New_York", briefingTime: "07:30", quietEnd: "07:00" };
 
@@ -100,5 +100,17 @@ describe("Scheduler lifecycle", () => {
     scheduler.start(); // starting twice must not double up
     scheduler.stop();
     scheduler.stop();
+  });
+});
+
+describe("weekly consolidation", () => {
+  it("queues one consolidate job per local date", () => {
+    scheduler.enqueueConsolidate();
+    scheduler.enqueueConsolidate();
+    expect(keys("consolidate")).toEqual(["consolidate:2026-11-20"]);
+  });
+
+  it("runs on Sunday at 03:00", () => {
+    expect(CONSOLIDATE_CRON).toBe("0 3 * * 0");
   });
 });

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { localDateKey } from "../time.js";
 
@@ -28,6 +28,7 @@ export class MemoryStore {
   private readonly profilePath: string;
   private readonly longTermPath: string;
   private readonly dailyDir: string;
+  private readonly backupDir: string;
 
   constructor(
     dir: string,
@@ -36,6 +37,7 @@ export class MemoryStore {
     this.profilePath = join(dir, "profile.md");
     this.longTermPath = join(dir, "memory.md");
     this.dailyDir = join(dir, "daily");
+    this.backupDir = join(dir, "backups");
     mkdirSync(this.dailyDir, { recursive: true });
     if (!existsSync(this.profilePath)) writeAtomic(this.profilePath, "");
     if (!existsSync(this.longTermPath)) writeAtomic(this.longTermPath, "");
@@ -66,6 +68,38 @@ export class MemoryStore {
     if (index === -1) lines.push(entry);
     else lines[index] = entry;
     writeAtomic(this.profilePath, lines.join("\n") + "\n");
+  }
+
+  /** Replace the whole long-term file (used by consolidation, after a backup). */
+  writeLongTerm(text: string): void {
+    writeAtomic(this.longTermPath, text);
+  }
+
+  /** Daily notes for the last `days` days including today, oldest first; days with no notes are left out. */
+  recentDaily(now: Date, days: number): { date: string; text: string }[] {
+    const out: { date: string; text: string }[] = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const date = localDateKey(new Date(now.getTime() - i * DAY_MS), this.tz);
+      const text = this.readDaily(date).trim();
+      if (text) out.push({ date, text });
+    }
+    return out;
+  }
+
+  /** Copy profile.md and memory.md to dated files. An existing backup is never overwritten; returns the paths created. */
+  backupCore(dateKey: string): string[] {
+    mkdirSync(this.backupDir, { recursive: true });
+    const made: string[] = [];
+    for (const [source, name] of [
+      [this.profilePath, "profile"],
+      [this.longTermPath, "memory"],
+    ] as const) {
+      const target = join(this.backupDir, `${dateKey}-${name}.md`);
+      if (existsSync(target)) continue;
+      copyFileSync(source, target);
+      made.push(target);
+    }
+    return made;
   }
 
   appendLongTerm(fact: string): void {

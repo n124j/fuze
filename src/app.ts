@@ -26,6 +26,7 @@ import { OwnerRegistry } from "./gateway/owner.js";
 import type { ChannelAdapter, InboundAction } from "./gateway/types.js";
 import type { LlmClient, Message, Pricing } from "./llm/types.js";
 import { MemoryStore } from "./memory/store.js";
+import { consolidateMemory, type ConsolidationEdits, type ConsolidationResult } from "./memory/consolidate.js";
 import { Notifier } from "./notify/notifier.js";
 import { JobQueue } from "./queue/queue.js";
 import { Worker, type Handler } from "./queue/worker.js";
@@ -246,6 +247,25 @@ export function buildApp(deps: AppDeps): App {
         dedupeKey: `briefing:${localDateKey(clock(), tz)}`,
         priority: "normal",
         text: out.join("\n"),
+      });
+    },
+    // The model's edits are checkpointed as soon as they arrive, so a retry never pays for them twice.
+    consolidate: async (job, ctx) => {
+      const saved = job.checkpoint as { edits?: ConsolidationEdits; outcome?: ConsolidationResult } | null;
+      // Once applied, the outcome is kept too: a retry after a failed send must report it, not find "nothing to change".
+      const res =
+        saved?.outcome ??
+        (await consolidateMemory(
+          { memory, llm, budget, model: config.models.strong, tz, clock, onEdits: (edits) => ctx.checkpoint({ edits }) },
+          saved?.edits,
+        ));
+      if (!saved?.outcome) ctx.checkpoint({ edits: res.edits, outcome: res });
+      const quiet = res.message === "Nothing to consolidate." || res.message === "No changes needed.";
+      if (!res.applied && quiet) return;
+      await notifier.notify({
+        dedupeKey: `consolidate:${localDateKey(clock(), tz)}`,
+        priority: "normal",
+        text: res.applied ? `Memory tidy-up: ${res.message}` : `I skipped this week's memory tidy-up: ${res.message}.`,
       });
     },
     "flush-deferred": async () => {

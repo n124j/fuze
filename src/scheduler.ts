@@ -6,6 +6,9 @@ import { localDateKey } from "./time.js";
 const HEARTBEAT_MS = 30 * 60 * 1000;
 const POLL_MS = 10 * 60 * 1000;
 
+/** Sundays at 03:00 local time, inside quiet hours. */
+export const CONSOLIDATE_CRON = "0 3 * * 0";
+
 /** `"07:30"` -> `"30 7 * * *"` (every day at that wall-clock time). */
 export function dailyCron(hhmm: string): string {
   const [h, m] = hhmm.split(":").map(Number);
@@ -42,6 +45,10 @@ export class Scheduler {
     this.queue.enqueue("poll", {}, { dedupeKey: `poll:${slot}` });
   }
 
+  enqueueConsolidate(): void {
+    this.queue.enqueue("consolidate", {}, { dedupeKey: `consolidate:${this.today()}` });
+  }
+
   enqueueHeartbeat(): void {
     const slot = Math.floor(this.clock().getTime() / HEARTBEAT_MS);
     this.queue.enqueue("heartbeat", {}, { dedupeKey: `heartbeat:${slot}` });
@@ -70,6 +77,7 @@ export class Scheduler {
       new Cron("*/10 * * * *", options, guarded(() => this.enqueuePoll())),
       new Cron(dailyCron(this.cfg.briefingTime), options, guarded(() => this.enqueueBriefing())),
       new Cron(dailyCron(this.cfg.quietEnd), options, guarded(() => this.enqueueFlushDeferred())),
+      new Cron(CONSOLIDATE_CRON, options, guarded(() => this.enqueueConsolidate())),
     ];
   }
 

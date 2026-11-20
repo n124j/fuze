@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -96,5 +96,35 @@ describe("snapshotForPrompt", () => {
     const s = mem.snapshotForPrompt(now);
     expect(s).toContain("- key0:");
     expect(s).toContain("- key399:");
+  });
+});
+
+describe("MemoryStore consolidation helpers", () => {
+  const now = new Date("2026-11-22T15:00:00Z");
+
+  it("recentDaily returns the last days oldest first and skips empty ones", () => {
+    mem.appendDaily("today note", now);
+    mem.appendDaily("three days ago", new Date(now.getTime() - 3 * 86_400_000));
+    mem.appendDaily("too old", new Date(now.getTime() - 9 * 86_400_000));
+    const days = mem.recentDaily(now, 7);
+    expect(days.map((d) => d.date)).toEqual(["2026-11-19", "2026-11-22"]);
+    expect(days[1]!.text).toContain("today note");
+  });
+
+  it("backupCore makes dated copies and never overwrites one", () => {
+    mem.appendLongTerm("original");
+    mem.setProfileEntry("tea", "green");
+    const made = mem.backupCore("2026-11-22");
+    expect(made).toHaveLength(2);
+    expect(readFileSync(join(dir, "backups", "2026-11-22-memory.md"), "utf8")).toBe("- original\n");
+    mem.appendLongTerm("changed later");
+    expect(mem.backupCore("2026-11-22")).toEqual([]);
+    expect(readFileSync(join(dir, "backups", "2026-11-22-memory.md"), "utf8")).toBe("- original\n");
+  });
+
+  it("writeLongTerm replaces the long-term file", () => {
+    mem.appendLongTerm("old");
+    mem.writeLongTerm("- new\n");
+    expect(mem.readLongTerm()).toBe("- new\n");
   });
 });

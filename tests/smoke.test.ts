@@ -423,3 +423,33 @@ describe("apple and slack", () => {
     expect(names(full)).toEqual(expect.arrayContaining(["reminders_list", "reminders_create", "slack_search"]));
   });
 });
+
+describe("memory consolidation job", () => {
+  it("tidies memory, tells the owner, and does not pay twice when the send fails once", async () => {
+    const edits = JSON.stringify({ add: ["Prefers mornings"], remove: ["- old fact"], summary: "Merged 1, added 1" });
+    const { app, adapter, llm } = await setup([reply(edits)]);
+    app.memory.appendLongTerm("old fact");
+    app.memory.appendLongTerm("keeper");
+    app.memory.appendDaily("asked for mornings", now);
+    adapter.failNext = 1;
+    const id = app.queue.enqueue("consolidate", {});
+    await app.worker.tick();
+    now = new Date(now.getTime() + 1500);
+    await app.worker.tick();
+    expect(app.queue.get(id)?.status).toBe("done");
+    expect(llm.calls).toHaveLength(1);
+    expect(app.memory.readLongTerm()).toBe("- keeper\n- Prefers mornings\n");
+    expect(adapter.sent.at(-1)!.text).toBe("Memory tidy-up: Merged 1, added 1");
+  });
+
+  it("tells the owner when it skips a tidy-up it did not trust", async () => {
+    const wipe = JSON.stringify({ add: [], remove: ["- a", "- b"], summary: "wipe" });
+    const { app, adapter } = await setup([reply(wipe)]);
+    app.memory.appendLongTerm("a");
+    app.memory.appendLongTerm("b");
+    app.queue.enqueue("consolidate", {});
+    await app.worker.tick();
+    expect(app.memory.readLongTerm()).toBe("- a\n- b\n");
+    expect(adapter.sent.at(-1)!.text).toContain("I skipped this week's memory tidy-up");
+  });
+});
