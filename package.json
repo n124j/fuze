@@ -10,7 +10,8 @@
     "test": "vitest run",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "dev": "tsx src/main.ts"
+    "dev": "tsx src/main.ts",
+    "google-auth": "tsx src/google/auth-cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.11.0",

@@ -9,6 +9,10 @@ export interface Config {
   dataDir: string;
   anthropicApiKey?: string;
   telegramBotToken?: string;
+  googleClientId?: string;
+  googleClientSecret?: string;
+  /** Lowercased addresses whose mail is always urgent. */
+  vipSenders: string[];
   models: { cheap: string; strong: string };
 }
 
@@ -32,6 +36,9 @@ const schema = z.object({
   dataDir: z.string().min(1),
   anthropicApiKey: z.string().optional(),
   telegramBotToken: z.string().optional(),
+  googleClientId: z.string().optional(),
+  googleClientSecret: z.string().optional(),
+  vipSenders: z.array(z.string()),
   models: z.object({ cheap: z.string().min(1), strong: z.string().min(1) }),
 });
 
@@ -46,6 +53,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     dataDir: get("FUSE_DATA_DIR") ?? "./data",
     anthropicApiKey: get("ANTHROPIC_API_KEY"),
     telegramBotToken: get("TELEGRAM_BOT_TOKEN"),
+    googleClientId: get("GOOGLE_CLIENT_ID"),
+    googleClientSecret: get("GOOGLE_CLIENT_SECRET"),
+    vipSenders: (get("FUSE_VIP_SENDERS") ?? "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
     models: {
       cheap: get("FUSE_MODEL_CHEAP") ?? "claude-haiku-5-5",
       strong: get("FUSE_MODEL_STRONG") ?? "claude-sonnet-5-5",
