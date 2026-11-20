@@ -59,6 +59,17 @@ describe("Scheduler jobs", () => {
   });
 });
 
+describe("Scheduler polling", () => {
+  it("queues one poll per 10-minute slot", () => {
+    scheduler.enqueuePoll();
+    scheduler.enqueuePoll();
+    expect(keys("poll")).toHaveLength(1);
+    now = new Date(now.getTime() + 11 * 60 * 1000);
+    scheduler.enqueuePoll();
+    expect(keys("poll")).toHaveLength(2);
+  });
+});
+
 describe("Scheduler catch-up", () => {
   it("queues a missed briefing and flush when started after their time", () => {
     scheduler.catchUp(); // 07:40 local: both 07:00 and 07:30 have passed

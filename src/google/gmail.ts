@@ -203,6 +203,10 @@ export class GmailClient {
 export class SeenItems {
   constructor(private readonly db: Db) {}
 
+  has(source: string, id: string): boolean {
+    return this.db.prepare("SELECT 1 FROM seen_items WHERE source = ? AND id = ?").get(source, id) !== undefined;
+  }
+
   /** True the first time `(source, id)` is seen, false afterwards. */
   markIfNew(source: string, id: string): boolean {
     return (

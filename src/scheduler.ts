@@ -4,6 +4,7 @@ import type { JobQueue } from "./queue/queue.js";
 import { localDateKey } from "./time.js";
 
 const HEARTBEAT_MS = 30 * 60 * 1000;
+const POLL_MS = 10 * 60 * 1000;
 
 /** `"07:30"` -> `"30 7 * * *"` (every day at that wall-clock time). */
 export function dailyCron(hhmm: string): string {
@@ -36,6 +37,11 @@ export class Scheduler {
     this.queue.enqueue("flush-deferred", {}, { dedupeKey: `flush-deferred:${this.today()}` });
   }
 
+  enqueuePoll(): void {
+    const slot = Math.floor(this.clock().getTime() / POLL_MS);
+    this.queue.enqueue("poll", {}, { dedupeKey: `poll:${slot}` });
+  }
+
   enqueueHeartbeat(): void {
     const slot = Math.floor(this.clock().getTime() / HEARTBEAT_MS);
     this.queue.enqueue("heartbeat", {}, { dedupeKey: `heartbeat:${slot}` });
@@ -61,6 +67,7 @@ export class Scheduler {
     };
     this.timers = [
       new Cron("*/30 * * * *", options, guarded(() => this.enqueueHeartbeat())),
+      new Cron("*/10 * * * *", options, guarded(() => this.enqueuePoll())),
       new Cron(dailyCron(this.cfg.briefingTime), options, guarded(() => this.enqueueBriefing())),
       new Cron(dailyCron(this.cfg.quietEnd), options, guarded(() => this.enqueueFlushDeferred())),
     ];
