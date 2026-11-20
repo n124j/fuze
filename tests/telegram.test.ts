@@ -1,18 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { InboundMessage } from "../src/gateway/types.js";
+import type { InboundAction, InboundMessage } from "../src/gateway/types.js";
 import { TelegramAdapter, type BotLike, type TelegramContext } from "../src/channels/telegram.js";
 
 class FakeBot implements BotLike {
-  handler: ((ctx: TelegramContext) => Promise<void> | void) | null = null;
+  handlers = new Map<string, (ctx: TelegramContext) => Promise<void> | void>();
   init = vi.fn(async () => ({}));
   start = vi.fn(() => new Promise<void>(() => {})); // long polling: never settles in the test
   stop = vi.fn(async () => {});
-  api = { sendMessage: vi.fn(async (_chatId: number | string, _text: string) => ({})) };
-  on(_event: "message", handler: (ctx: TelegramContext) => Promise<void> | void) {
-    this.handler = handler;
+  api = { sendMessage: vi.fn(async (_chatId: number | string, _text: string, _other?: object) => ({})) };
+  on(event: "message" | "callback_query:data", handler: (ctx: TelegramContext) => Promise<void> | void) {
+    this.handlers.set(event, handler);
   }
   deliver(message: TelegramContext["message"]) {
-    return this.handler!({ message });
+    return this.handlers.get("message")!({ message });
+  }
+  tap(data: string, over: Record<string, unknown> = {}) {
+    const answer = vi.fn(async () => true);
+    const done = this.handlers.get("callback_query:data")!({
+      callbackQuery: { data, from: { id: 42 }, message: { chat: { id: 42, type: "private" } }, ...over },
+      answerCallbackQuery: answer,
+    });
+    return { done, answer };
   }
 }
 
@@ -119,5 +127,48 @@ describe("TelegramAdapter outbound", () => {
   it("rejects when Telegram refuses, so the caller can decide what to do", async () => {
     bot.api.sendMessage.mockRejectedValueOnce(new Error("429 Too Many Requests"));
     await expect(adapter.send("42", "x")).rejects.toThrow("429");
+  });
+});
+
+describe("TelegramAdapter actions", () => {
+  it("does not listen for button taps unless a handler was given", () => {
+    expect(bot.handlers.has("callback_query:data")).toBe(false);
+  });
+
+  it("maps a button tap to an action and stops the spinner", async () => {
+    const taps: InboundAction[] = [];
+    const b = new FakeBot();
+    await new TelegramAdapter("123:fake-token", b).start(async () => {}, async (a) => void taps.push(a));
+    const { done, answer } = b.tap("approve:abc");
+    await done;
+    expect(taps).toEqual([
+      expect.objectContaining({ channel: "telegram", channelUserId: "42", chatId: "42", isPrivate: true, actionId: "approve:abc" }),
+    ]);
+    expect(answer).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks a tap from a group chat as not private", async () => {
+    const taps: InboundAction[] = [];
+    const b = new FakeBot();
+    await new TelegramAdapter("123:fake-token", b).start(async () => {}, async (a) => void taps.push(a));
+    await b.tap("approve:abc", { message: { chat: { id: -100, type: "supergroup" } } }).done;
+    expect(taps[0]!.isPrivate).toBe(false);
+  });
+
+  it("sends an inline keyboard with the actions", async () => {
+    await adapter.sendWithActions("42", "Approve?", [
+      { id: "approve:x1", label: "Approve" },
+      { id: "reject:x1", label: "Reject" },
+    ]);
+    expect(bot.api.sendMessage).toHaveBeenCalledWith("42", "Approve?", {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "Approve", callback_data: "approve:x1" },
+            { text: "Reject", callback_data: "reject:x1" },
+          ],
+        ],
+      },
+    });
   });
 });

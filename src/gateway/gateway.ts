@@ -1,7 +1,7 @@
 import { BudgetExhaustedError } from "../budget/guard.js";
 import type { Db } from "../db.js";
 import type { OwnerRegistry } from "./owner.js";
-import type { ChannelAdapter, InboundMessage } from "./types.js";
+import type { Action, ChannelAdapter, InboundAction, InboundMessage } from "./types.js";
 
 const TELEGRAM_LIMIT = 4096;
 
@@ -19,12 +19,24 @@ export function chunkMessage(text: string, limit = TELEGRAM_LIMIT): string[] {
   return chunks;
 }
 
+/** Send text with tappable buttons, or as plain text with slash commands when the channel has no buttons. */
+export async function sendWithFallback(adapter: ChannelAdapter, chatId: string, text: string, actions: Action[]): Promise<void> {
+  if (adapter.sendWithActions) {
+    await adapter.sendWithActions(chatId, text, actions);
+    return;
+  }
+  const commands = actions.map((a) => `/${a.id.replace(":", " ")}`);
+  await adapter.send(chatId, `${text}\n\nReply ${commands.join(" or ")}`);
+}
+
 export interface GatewayDeps {
   owners: OwnerRegistry;
   adapters: ChannelAdapter[];
   /** Produce the reply for one owner message in a session. */
   respond: (sessionId: string, userText: string) => Promise<string>;
   db: Db;
+  /** Handle an owner tap (or /approve, /reject) and return the confirmation to show. */
+  onAction?: (a: InboundAction) => Promise<string>;
 }
 
 /**
@@ -38,7 +50,10 @@ export class Gateway {
 
   async start(): Promise<void> {
     for (const adapter of this.deps.adapters) {
-      await adapter.start((m) => this.handle(m, adapter));
+      await adapter.start(
+        (m) => this.handle(m, adapter),
+        (a) => this.handleAction(a, adapter),
+      );
     }
   }
 
@@ -64,6 +79,22 @@ export class Gateway {
       return;
     }
 
+    const command = this.deps.onAction ? text.match(/^\/(approve|reject)\s+([A-Za-z0-9]+)$/i) : null;
+    if (command) {
+      await this.handleAction(
+        {
+          channel: msg.channel,
+          channelUserId: msg.channelUserId,
+          chatId: msg.chatId,
+          isPrivate: msg.isPrivate,
+          actionId: `${command[1]!.toLowerCase()}:${command[2]}`,
+          receivedAt: msg.receivedAt,
+        },
+        adapter,
+      );
+      return;
+    }
+
     const sessionId = this.sessionFor(msg);
     const previous = this.chains.get(sessionId) ?? Promise.resolve();
     const run = previous.then(() => this.answer(adapter, msg.chatId, sessionId, text));
@@ -73,6 +104,19 @@ export class Gateway {
     } finally {
       if (this.chains.get(sessionId) === run) this.chains.delete(sessionId);
     }
+  }
+
+  async handleAction(action: InboundAction, adapter: ChannelAdapter): Promise<void> {
+    if (!this.deps.onAction) return;
+    if (!action.isPrivate || !this.deps.owners.isOwner(action.channel, action.channelUserId)) return;
+    let reply: string;
+    try {
+      reply = await this.deps.onAction(action);
+    } catch (err) {
+      console.error("[gateway] action failed:", err instanceof Error ? err.name : "unknown error");
+      reply = "Something went wrong handling that. Please try again.";
+    }
+    if (reply.trim() !== "") await this.safeSend(adapter, action.chatId, reply);
   }
 
   private sessionFor(msg: InboundMessage): string {
