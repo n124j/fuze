@@ -127,6 +127,22 @@ describe("owner conversations", () => {
   });
 });
 
+describe("startup safety", () => {
+  it("refuses to start with a model that has no price, so spend can never go unrecorded", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fuse-smoke-"));
+    dirs.push(dir);
+    expect(() =>
+      buildApp({
+        config: loadConfig({ FUSE_DATA_DIR: dir, FUSE_MODEL_STRONG: "claude-unpriced-model" }),
+        db: openDb(":memory:"),
+        llm: new ScriptedLlm([]),
+        adapters: [new FakeAdapter()],
+        clock: () => now,
+      }),
+    ).toThrow(/claude-unpriced-model/);
+  });
+});
+
 describe("background jobs", () => {
   it("sends the morning briefing with the low-priority digest", async () => {
     const { app, adapter } = await setup();

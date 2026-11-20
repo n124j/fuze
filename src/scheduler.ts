@@ -11,6 +11,11 @@ export function dailyCron(hhmm: string): string {
   return `${m} ${h} * * *`;
 }
 
+function toMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h! * 60 + m!;
+}
+
 type SchedulerConfig = Pick<Config, "timezone" | "briefingTime" | "quietEnd">;
 
 /** Turns the clock into queued jobs; the worker does the actual work. Deduplicated, so firing twice is harmless. */
@@ -36,8 +41,16 @@ export class Scheduler {
     this.queue.enqueue("heartbeat", {}, { dedupeKey: `heartbeat:${slot}` });
   }
 
+  /** Queue today's briefing / overnight flush if their time already passed (Mac asleep or restarting). Deduplicated per day. */
+  catchUp(): void {
+    const minutes = this.localMinutes();
+    if (minutes >= toMinutes(this.cfg.quietEnd)) this.enqueueFlushDeferred();
+    if (minutes >= toMinutes(this.cfg.briefingTime)) this.enqueueBriefing();
+  }
+
   start(): void {
     if (this.timers.length > 0) return;
+    this.catchUp();
     const options = { timezone: this.cfg.timezone };
     const guarded = (fn: () => void) => () => {
       try {
@@ -56,6 +69,17 @@ export class Scheduler {
   stop(): void {
     for (const t of this.timers) t.stop();
     this.timers = [];
+  }
+
+  private localMinutes(): number {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: this.cfg.timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(this.clock());
+    const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+    return get("hour") * 60 + get("minute");
   }
 
   private today(): string {

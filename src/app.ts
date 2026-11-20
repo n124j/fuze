@@ -73,8 +73,14 @@ export function buildApp(deps: AppDeps): App {
   const tz = config.timezone;
   const nowMs = () => clock().getTime();
 
+  const pricing = deps.pricing ?? DEFAULT_PRICING;
+  // A model with no price would spend money the budget cannot record, so refuse to start.
+  for (const model of [config.models.cheap, config.models.strong]) {
+    if (!pricing[model]) throw new Error(`No price known for model "${model}"; add it to the pricing table before using it`);
+  }
+
   const memory = new MemoryStore(join(config.dataDir, "memory"), tz);
-  const budget = new BudgetGuard(db, config.dailyBudgetUsd, tz, deps.pricing ?? DEFAULT_PRICING, clock);
+  const budget = new BudgetGuard(db, config.dailyBudgetUsd, tz, pricing, clock);
   const tools = new ToolRegistry();
   registerMemoryTools(tools, memory);
   const owners = new OwnerRegistry(db, nowMs);

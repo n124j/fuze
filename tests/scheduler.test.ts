@@ -59,6 +59,30 @@ describe("Scheduler jobs", () => {
   });
 });
 
+describe("Scheduler catch-up", () => {
+  it("queues a missed briefing and flush when started after their time", () => {
+    scheduler.catchUp(); // 07:40 local: both 07:00 and 07:30 have passed
+    expect(keys("briefing")).toEqual(["briefing:2026-11-20"]);
+    expect(keys("flush-deferred")).toEqual(["flush-deferred:2026-11-20"]);
+    scheduler.catchUp();
+    expect(keys("briefing")).toHaveLength(1);
+  });
+
+  it("queues nothing before their time today", () => {
+    now = new Date("2026-11-20T11:00:00Z"); // 06:00 local
+    scheduler.catchUp();
+    expect(keys("briefing")).toEqual([]);
+    expect(keys("flush-deferred")).toEqual([]);
+  });
+
+  it("queues only the flush between quiet end and the briefing", () => {
+    now = new Date("2026-11-20T12:10:00Z"); // 07:10 local
+    scheduler.catchUp();
+    expect(keys("briefing")).toEqual([]);
+    expect(keys("flush-deferred")).toEqual(["flush-deferred:2026-11-20"]);
+  });
+});
+
 describe("Scheduler lifecycle", () => {
   it("starts and stops its timers cleanly", () => {
     scheduler.start();
