@@ -165,10 +165,15 @@ export class GmailClient {
     }
     const items: MailItem[] = [];
     for (const id of ids.slice(0, MAX_NEW_MESSAGES_PER_POLL)) {
-      const m = await this.http.json<GmailMessage>("GET", `${BASE}/messages/${id}`, {
-        query: { format: "metadata", metadataHeaders: "From,Subject,List-Unsubscribe,Precedence" },
-      });
-      items.push(toMailItem(m));
+      try {
+        const m = await this.http.json<GmailMessage>("GET", `${BASE}/messages/${encodeURIComponent(id)}`, {
+          query: { format: "metadata", metadataHeaders: "From,Subject,List-Unsubscribe,Precedence" },
+        });
+        items.push(toMailItem(m));
+      } catch (err) {
+        // Deleted before we could read it: nothing to announce, and it must not block the rest.
+        if (!(err instanceof GoogleApiError && err.status === 404)) throw err;
+      }
     }
     return { items, historyId: latest };
   }

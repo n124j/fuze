@@ -78,6 +78,19 @@ describe("GmailClient.newMessagesSince", () => {
     expect((await new GmailClient(http).newMessagesSince("1")).items[0]!.isBulk).toBe(true);
   });
 
+  it("skips a message that was deleted before it could be read", async () => {
+    const { http } = fakeHttp((_m, url) => {
+      if (url.endsWith("/history")) {
+        return { history: [{ messagesAdded: [{ message: { id: "gone", labelIds: ["INBOX"] } }, { message: { id: "ok", labelIds: ["INBOX"] } }] }], historyId: "300" };
+      }
+      if (url.endsWith("/messages/gone")) throw new GoogleApiError("gone", 404);
+      return metadata("ok", { From: "a@b.com", Subject: "still here" });
+    });
+    const out = await new GmailClient(http).newMessagesSince("1");
+    expect(out.items.map((i) => i.id)).toEqual(["ok"]);
+    expect(out.historyId).toBe("300");
+  });
+
   it("follows paging", async () => {
     const calls: unknown[] = [];
     const { http } = fakeHttp((_m, url, opts) => {

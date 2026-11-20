@@ -42,6 +42,7 @@ export class CalendarClient {
   constructor(
     private readonly http: Pick<GoogleHttp, "json">,
     private readonly db: Db,
+    private readonly now: () => number = Date.now,
   ) {}
 
   async listBetween(from: Date, to: Date): Promise<CalEvent[]> {
@@ -59,7 +60,9 @@ export class CalendarClient {
 
   /** Creates the event on the primary calendar. The same title and times are never created twice. */
   async createEvent(e: { title: string; start: Date; end: Date; location?: string }): Promise<CalEvent> {
-    const key = `event:${createHash("sha256").update(`${e.title}|${e.start.toISOString()}|${e.end.toISOString()}`).digest("hex")}`;
+    // Scoped to the current hour: a retry of the same request collapses, a genuine repeat later does not.
+    const hour = Math.floor(this.now() / 3_600_000);
+    const key = `event:${createHash("sha256").update(`${hour}|${e.title}|${e.start.toISOString()}|${e.end.toISOString()}`).digest("hex")}`;
     // runOnce stores JSON, so keep the raw Google shape and convert on the way out.
     const raw = await runOnce(this.db, key, () =>
       this.http.json<GoogleEvent>("POST", EVENTS, {

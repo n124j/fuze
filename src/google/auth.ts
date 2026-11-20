@@ -185,8 +185,11 @@ export class GoogleHttp {
         token = await this.auth.refresh();
         continue;
       }
-      const retryable = res === null || res.status === 429 || res.status >= 500;
-      if (!retryable) throw new GoogleApiError(`Google API ${where} failed (${res!.status})`, res!.status);
+      // A POST or PATCH that failed with a 5xx or a lost connection may already have been applied, so only
+      // reads are repeated; a 429 means Google refused it unprocessed and is safe to repeat for everything.
+      const readOnly = method === "GET" || method === "DELETE";
+      const retryable = readOnly ? res === null || res.status === 429 || res.status >= 500 : res?.status === 429;
+      if (!retryable) throw new GoogleApiError(`Google API ${where} failed (${res?.status ?? "network"})`, res?.status ?? 0);
       if (attempt >= BACKOFF_MS.length) {
         throw new GoogleApiError(`Google API ${where} failed (${res?.status ?? "network"})`, res?.status ?? 0);
       }

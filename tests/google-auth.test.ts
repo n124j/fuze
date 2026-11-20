@@ -96,6 +96,24 @@ describe("GoogleHttp", () => {
     expect(sleep.mock.calls.map((c) => c[0])).toEqual([500, 1000, 2000]);
   });
 
+  it("never repeats a POST after a 5xx or a lost connection, since Google may have applied it", async () => {
+    const fetchFn = vi.fn(async () => json(503, { error: "busy" }));
+    const http = new GoogleHttp(auth, { fetch: fetchFn as never, sleep });
+    await expect(http.json("POST", "https://x.test/a", { body: {} })).rejects.toMatchObject({ status: 503 });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const lost = vi.fn(async () => {
+      throw new TypeError("socket hang up");
+    });
+    await expect(new GoogleHttp(auth, { fetch: lost as never, sleep }).json("POST", "https://x.test/a", { body: {} })).rejects.toMatchObject({ status: 0 });
+    expect(lost).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries a POST that Google refused with 429 (it was not processed)", async () => {
+    const fetchFn = vi.fn().mockResolvedValueOnce(json(429, {})).mockResolvedValueOnce(json(200, { ok: 1 }));
+    const http = new GoogleHttp(auth, { fetch: fetchFn as never, sleep });
+    expect(await http.json("POST", "https://x.test/a", { body: {} })).toEqual({ ok: 1 });
+  });
+
   it("does not retry a 404", async () => {
     const fetchFn = vi.fn(async () => json(404, { error: "nope" }));
     const http = new GoogleHttp(auth, { fetch: fetchFn as never, sleep });

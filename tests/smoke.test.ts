@@ -275,7 +275,7 @@ describe("google: drafts and approval", () => {
     const { adapter, google } = await requestSend();
     expect(adapter.withActions).toHaveLength(1);
     expect(adapter.withActions[0]!.text).toContain("ann@x.com");
-    expect(adapter.withActions[0]!.text).not.toContain("See you at noon");
+    expect(adapter.withActions[0]!.text).toContain("See you at noon");
     expect(adapter.withActions[0]!.actions.map((a) => a.label)).toEqual(["Approve", "Reject"]);
     expect(google.gmail.sendDraft).not.toHaveBeenCalled();
   });

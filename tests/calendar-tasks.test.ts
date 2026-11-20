@@ -89,6 +89,33 @@ describe("CalendarClient", () => {
   });
 });
 
+describe("repeat requests later on", () => {
+  const draft = { title: "Dentist", start: new Date("2026-11-25T15:00:00Z"), end: new Date("2026-11-25T16:00:00Z") };
+  it("creates the same event again once an hour has passed", async () => {
+    let t = 1_000_000;
+    const { http, json } = fakeHttp(() => ({ id: "n", summary: "Dentist", start: { dateTime: draft.start.toISOString() }, end: { dateTime: draft.end.toISOString() } }));
+    const cal = new CalendarClient(http, openDb(":memory:"), () => t);
+    await cal.createEvent(draft);
+    await cal.createEvent(draft);
+    expect(json).toHaveBeenCalledTimes(1);
+    t += 2 * 3_600_000;
+    await cal.createEvent(draft);
+    expect(json).toHaveBeenCalledTimes(2);
+  });
+
+  it("creates the same task again once an hour has passed", async () => {
+    let t = 1_000_000;
+    const { http, json } = fakeHttp(() => ({ id: "n", title: "Call mom", status: "needsAction" }));
+    const tasks = new TasksClient(http, openDb(":memory:"), () => t);
+    await tasks.create("Call mom");
+    await tasks.create("Call mom");
+    expect(json).toHaveBeenCalledTimes(1);
+    t += 2 * 3_600_000;
+    await tasks.create("Call mom");
+    expect(json).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("TasksClient", () => {
   it("lists only open tasks", async () => {
     const { http, json } = fakeHttp(() => ({

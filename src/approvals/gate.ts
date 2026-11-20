@@ -1,9 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Db } from "../db.js";
+import { GoogleApiError } from "../google/auth.js";
 import type { DraftContent, GmailClient } from "../google/gmail.js";
 import { AmbiguousActionError, runOnce } from "../idempotency.js";
 
 const APPROVAL_TTL_MS = 24 * 3_600_000;
+const BODY_EXCERPT_CHARS = 500;
 
 export type Decision =
   | "sent"
@@ -54,8 +56,9 @@ export class ApprovalGate {
         "INSERT INTO approvals (id, draft_id, summary, hash, status, created_at, expires_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
       )
       .run(id, draftId, summary, draftHash(draft), now, now + APPROVAL_TTL_MS);
+    const excerpt = draft.body.length > BODY_EXCERPT_CHARS ? `${draft.body.slice(0, BODY_EXCERPT_CHARS)}...` : draft.body;
     await this.ask(
-      `Approve sending this email?\nTo: ${recipients}\nSubject: ${draft.subject}\nThe full text is in your Gmail drafts. It expires in 24 hours.`,
+      `Approve sending this email?\nTo: ${recipients}\nSubject: ${draft.subject}\n\n${excerpt}\n\nThe full text is in your Gmail drafts. It expires in 24 hours.`,
       id,
     );
     return id;
@@ -70,7 +73,7 @@ export class ApprovalGate {
   async decide(id: string, verdict: "approve" | "reject"): Promise<Decision> {
     const row = this.db.prepare("SELECT id, draft_id, hash, status, expires_at FROM approvals WHERE id = ?").get(id) as Row | undefined;
     if (!row) return "unknown-id";
-    if (row.status === "sending") return "send-unconfirmed";
+    if (row.status === "sending" || row.status === "unconfirmed") return "send-unconfirmed";
     if (row.status !== "pending") return "already-decided";
     const now = this.clock().getTime();
     if (now > row.expires_at) {
@@ -82,8 +85,14 @@ export class ApprovalGate {
       return "rejected";
     }
 
-    const current = await this.gmail.getDraft(row.draft_id);
-    if (draftHash(current) !== row.hash) {
+    let current: DraftContent | null;
+    try {
+      current = await this.gmail.getDraft(row.draft_id);
+    } catch (err) {
+      if (!(err instanceof GoogleApiError && err.status === 404)) throw err;
+      current = null; // the owner deleted the draft in Gmail
+    }
+    if (current === null || draftHash(current) !== row.hash) {
       this.setStatus(id, "void", now);
       return "changed";
     }
@@ -98,8 +107,14 @@ export class ApprovalGate {
         this.setStatus(id, "unconfirmed", now);
         return "send-unconfirmed";
       }
-      this.db.prepare("UPDATE approvals SET status = 'pending' WHERE id = ? AND status = 'sending'").run(id);
-      throw err;
+      if (err instanceof GoogleApiError && err.status >= 400 && err.status < 500 && err.status !== 429) {
+        // Gmail clearly refused it, so nothing went out and the owner may tap again.
+        this.db.prepare("UPDATE approvals SET status = 'pending' WHERE id = ? AND status = 'sending'").run(id);
+        throw err;
+      }
+      // A 5xx, a lost connection or anything unknown: the email may well have been sent. Never repeat it.
+      this.setStatus(id, "unconfirmed", now);
+      return "send-unconfirmed";
     }
     this.setStatus(id, "sent", now);
     return "sent";

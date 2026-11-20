@@ -164,6 +164,14 @@ describe("PollService calendar", () => {
 });
 
 describe("PollService failures", () => {
+  it("still alerts about a close meeting when mail polling is failing, then lets the job retry", async () => {
+    await poll.pollOnce();
+    gmail.newMessagesSince.mockRejectedValue(new GoogleApiError("down", 503));
+    calendar.listBetween.mockResolvedValue([event()]);
+    await expect(poll.pollOnce()).rejects.toBeInstanceOf(GoogleApiError);
+    expect(notified().map((n) => n.dedupeKey)).toEqual(["cal:e1:2026-11-20T17:00:00.000Z:"]);
+  });
+
   it("tells the owner once a day to reconnect Google, and does not retry", async () => {
     gmail.currentHistoryId.mockRejectedValue(new GoogleAuthError());
     await expect(poll.pollOnce()).resolves.toEqual({ mail: 0, events: 0 });

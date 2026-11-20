@@ -32,6 +32,7 @@ export class TasksClient {
   constructor(
     private readonly http: Pick<GoogleHttp, "json">,
     private readonly db: Db,
+    private readonly now: () => number = Date.now,
   ) {}
 
   async listOpen(): Promise<TaskItem[]> {
@@ -43,7 +44,9 @@ export class TasksClient {
 
   /** Creates the task in the default list. The same title and due date are never created twice. */
   async create(title: string, due?: Date): Promise<TaskItem> {
-    const key = `task:${createHash("sha256").update(`${title}|${due?.toISOString() ?? ""}`).digest("hex")}`;
+    // Scoped to the current hour: a retry of the same request collapses, a genuine repeat later does not.
+    const hour = Math.floor(this.now() / 3_600_000);
+    const key = `task:${createHash("sha256").update(`${hour}|${title}|${due?.toISOString() ?? ""}`).digest("hex")}`;
     const raw = await runOnce(this.db, key, () =>
       this.http.json<GoogleTask>("POST", TASKS, { body: { title, ...(due ? { due: due.toISOString() } : {}) } }),
     );

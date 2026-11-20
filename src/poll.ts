@@ -27,8 +27,16 @@ export class PollService {
 
   async pollOnce(): Promise<{ mail: number; events: number }> {
     try {
-      const mail = await this.pollMail();
+      // A mail problem must not silence meeting alerts: do the calendar, then let the job retry the mail.
+      let mail = 0;
+      let mailError: unknown;
+      try {
+        mail = await this.pollMail();
+      } catch (err) {
+        mailError = err;
+      }
       const events = await this.pollCalendar();
+      if (mailError !== undefined) throw mailError;
       return { mail, events };
     } catch (err) {
       if (err instanceof GoogleAuthError) {

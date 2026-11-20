@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApprovalGate, draftHash } from "../src/approvals/gate.js";
 import { openDb, type Db } from "../src/db.js";
+import { GoogleApiError } from "../src/google/auth.js";
 import type { DraftContent } from "../src/google/gmail.js";
 
 const T0 = new Date("2026-11-20T13:00:00Z");
@@ -35,14 +36,22 @@ describe("draftHash", () => {
 });
 
 describe("ApprovalGate.request", () => {
-  it("asks the owner with recipients and subject but never the body", async () => {
+  it("shows the owner the start of the body, cut at 500 characters", async () => {
+    draft.body = "x".repeat(900);
+    await gate.request("d1");
+    const text = ask.mock.calls[0]![0] as string;
+    expect(text).toContain("x".repeat(500));
+    expect(text).not.toContain("x".repeat(501));
+  });
+
+  it("asks the owner with recipients, subject and a body excerpt", async () => {
     const id = await gate.request("d1");
     expect(ask).toHaveBeenCalledTimes(1);
     const [text, approvalId] = ask.mock.calls[0]!;
     expect(approvalId).toBe(id);
     expect(text).toContain("Ann@Example.com");
     expect(text).toContain("Lunch");
-    expect(text).not.toContain("SECRET BODY");
+    expect(text).toContain("SECRET BODY: see you at noon");
     expect(gate.pending()).toEqual([{ id, summary: expect.stringContaining("Lunch") }]);
   });
 });
@@ -105,13 +114,34 @@ describe("ApprovalGate.decide", () => {
     expect(sendDraft).not.toHaveBeenCalled();
   });
 
-  it("keeps the request open for a retry when Gmail fails, and passes the error up", async () => {
-    sendDraft.mockRejectedValueOnce(new Error("gmail down"));
+  it("keeps the request open for a retry when Gmail clearly refused it (4xx)", async () => {
+    sendDraft.mockRejectedValueOnce(new GoogleApiError("bad request", 400));
     const id = await gate.request("d1");
-    await expect(gate.decide(id, "approve")).rejects.toThrow("gmail down");
+    await expect(gate.decide(id, "approve")).rejects.toThrow("bad request");
     expect(status(id)).toBe("pending");
     expect(await gate.decide(id, "approve")).toBe("sent");
     expect(sendDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not claim a failure when the answer was lost: 5xx, network or unknown errors are unconfirmed", async () => {
+    for (const err of [new GoogleApiError("busy", 503), new GoogleApiError("reset", 0), new Error("who knows")]) {
+      sendDraft.mockClear();
+      sendDraft.mockRejectedValueOnce(err);
+      const id = await gate.request("d1");
+      expect(await gate.decide(id, "approve")).toBe("send-unconfirmed");
+      expect(status(id)).toBe("unconfirmed");
+      expect(await gate.decide(id, "approve")).toBe("send-unconfirmed");
+      expect(sendDraft).toHaveBeenCalledTimes(1);
+      expect(gate.pending()).toEqual([]);
+    }
+  });
+
+  it("treats a draft that was deleted in Gmail as changed, not as an error", async () => {
+    const id = await gate.request("d1");
+    gate = new ApprovalGate(db, { getDraft: async () => { throw new GoogleApiError("gone", 404); }, sendDraft } as never, ask as never, () => now);
+    expect(await gate.decide(id, "approve")).toBe("changed");
+    expect(sendDraft).not.toHaveBeenCalled();
+    expect(status(id)).toBe("void");
   });
 
   it("never sends again when an earlier send was started but not recorded", async () => {
