@@ -5,10 +5,13 @@ import { SlackAuthError, type SlackClient, type SlackItem } from "./client.js";
 
 const STATE_KEY = "slack.lastTs";
 const MAX_TEXT = 200;
+/** Slack's search index lags, so each check looks back this far; already-seen messages are skipped. */
+const LOOKBACK_SECONDS = 15 * 60;
 
 export interface SlackPollDeps {
-  client: Pick<SlackClient, "findNew">;
-  userId: string;
+  client: Pick<SlackClient, "findNew" | "whoAmI">;
+  /** Known at startup when Slack answered then; otherwise looked up on the first check that needs it. */
+  userId?: string;
   seen: SeenItems;
   state: ConnectorState;
   notifier: Pick<Notifier, "notify">;
@@ -26,7 +29,11 @@ const describe = (i: SlackItem): string =>
 
 /** Checks Slack for new direct messages and mentions and hands each to the notifier once. */
 export class SlackPoll {
-  constructor(private readonly d: SlackPollDeps) {}
+  private userId: string | undefined;
+
+  constructor(private readonly d: SlackPollDeps) {
+    this.userId = d.userId;
+  }
 
   async pollOnce(): Promise<number> {
     const last = this.d.state.get(STATE_KEY);
@@ -36,7 +43,8 @@ export class SlackPoll {
       return 0;
     }
     try {
-      const items = await this.d.client.findNew(this.d.userId, Number(last));
+      this.userId ??= (await this.d.client.whoAmI()).userId;
+      const items = await this.d.client.findNew(this.userId, Number(last) - LOOKBACK_SECONDS);
       let count = 0;
       for (const item of items) {
         if (!this.d.seen.has("slack", item.key)) {
@@ -45,7 +53,8 @@ export class SlackPoll {
           this.d.seen.markIfNew("slack", item.key);
           count++;
         }
-        this.d.state.set(STATE_KEY, String(item.ts));
+        // Never moves backwards: the lookback window can return messages older than the marker.
+        if (item.ts > Number(this.d.state.get(STATE_KEY))) this.d.state.set(STATE_KEY, String(item.ts));
       }
       return count;
     } catch (err) {

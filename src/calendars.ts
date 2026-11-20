@@ -7,7 +7,9 @@ interface ExtraCalendar {
   listBetween(from: Date, to: Date): Promise<CalEvent[]>;
 }
 
-const keyOf = (e: CalEvent): string => (e.uid ? `uid:${e.uid}` : `t:${e.title.trim().toLowerCase()}|${e.start.toISOString()}`);
+// Every instance of a recurring series shares one uid, so the start time is part of the key.
+const keyOf = (e: CalEvent): string =>
+  e.uid ? `uid:${e.uid}|${e.start.toISOString()}` : `t:${e.title.trim().toLowerCase()}|${e.start.toISOString()}`;
 
 /**
  * One calendar made of the primary plus extra read-only sources. The same event seen twice

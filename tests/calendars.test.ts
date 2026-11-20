@@ -59,3 +59,17 @@ describe("mergeCalendars", () => {
     expect(extra.createEvent).not.toHaveBeenCalled();
   });
 });
+
+describe("mergeCalendars: recurring events", () => {
+  it("keeps every instance of a recurring Google series (same uid, different start)", async () => {
+    const p = primary([ev("g1", "Standup", "2026-11-20T14:00:00Z", "series"), ev("g2", "Standup", "2026-11-21T14:00:00Z", "series")]);
+    const merged = mergeCalendars(p, [], vi.fn());
+    expect(await merged.listBetween(...range)).toHaveLength(2);
+  });
+
+  it("still removes the Apple copy of a specific instance", async () => {
+    const p = primary([ev("g1", "Standup", "2026-11-20T14:00:00Z", "series")]);
+    const merged = mergeCalendars(p, [{ name: "Apple", listBetween: async () => [ev("apple:series", "Standup", "2026-11-20T14:00:00Z", "series")] }], vi.fn());
+    expect((await merged.listBetween(...range)).map((e) => e.id)).toEqual(["g1"]);
+  });
+});

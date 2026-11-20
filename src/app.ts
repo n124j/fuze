@@ -60,7 +60,7 @@ export interface AppDeps {
     reminders: Pick<RemindersClient, "listOpen" | "create">;
   };
   /** Read-only Slack for the owner. */
-  slack?: { client: Pick<SlackClient, "findNew" | "search">; userId: string };
+  slack?: { client: Pick<SlackClient, "findNew" | "search" | "whoAmI">; userId?: string };
 }
 
 const DECISION_TEXT: Record<Decision, string> = {

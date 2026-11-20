@@ -108,7 +108,7 @@ function pollSetup(findNew: (userId: string, since: number) => Promise<SlackItem
   const state = new ConnectorState(db);
   const clock = () => new Date("2026-11-20T15:00:00Z");
   const poll = new SlackPoll({
-    client: { findNew: vi.fn(findNew) },
+    client: { findNew: vi.fn(findNew), whoAmI: vi.fn(async () => ({ userId: "U_ME" })) },
     userId: "U_ME",
     seen,
     state,
@@ -198,5 +198,80 @@ describe("slack_search tool", () => {
     const reg = new ToolRegistry();
     registerSlackTools(reg, { client: { search: vi.fn(async () => []) } });
     expect(await reg.execute("slack_search", { query: "zzz" }, { approved: false })).toContain("No Slack messages");
+  });
+});
+
+describe("review fixes: slack paging, lookback and lazy sign-in", () => {
+  it("reads further pages while results are still newer than the last check", async () => {
+    const pagesAsked: string[] = [];
+    const { slack } = client((_m, params) => {
+      if (params.get("query") !== "is:dm") return search();
+      const page = params.get("page") ?? "1";
+      pagesAsked.push(page);
+      const body = page === "1" ? [match("300.0", "newest", { im: true, channel: "D1" })] : [match("200.0", "older", { im: true, channel: "D1" })];
+      return json({ ok: true, messages: { matches: body, paging: { pages: 2 } } });
+    });
+    const items = await slack.findNew("U_ME", 150);
+    expect(pagesAsked).toEqual(["1", "2"]);
+    expect(items.map((i) => i.ts)).toEqual([200, 300]);
+  });
+
+  it("stops paging once a page reaches messages already handled", async () => {
+    const pagesAsked: string[] = [];
+    const { slack } = client((_m, params) => {
+      if (params.get("query") !== "is:dm") return search();
+      pagesAsked.push(params.get("page") ?? "1");
+      return json({ ok: true, messages: { matches: [match("100.0", "old", { im: true, channel: "D1" })], paging: { pages: 5 } } });
+    });
+    await slack.findNew("U_ME", 150);
+    expect(pagesAsked).toEqual(["1"]);
+  });
+
+  it("looks back 15 minutes so a late-indexed message is still delivered, without moving the marker back", async () => {
+    const since: number[] = [];
+    const { poll, state, notify } = pollSetup(async (_u, s) => {
+      since.push(s);
+      return [item(1_800_000_500)];
+    });
+    state.set("slack.lastTs", "1800000900");
+    expect(await poll.pollOnce()).toBe(1);
+    expect(since).toEqual([1_800_000_000]);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(Number(state.get("slack.lastTs"))).toBe(1_800_000_900);
+  });
+
+  it("does not skip a second message that shares a timestamp after a failed send", async () => {
+    let fail = true;
+    const notify = vi.fn(async (n: { dedupeKey: string }) => {
+      if (fail && n.dedupeKey.endsWith("C2:1800000001")) throw new Error("down");
+      return {} as never;
+    });
+    const items = [item(1_800_000_001, { key: "C1:1800000001" }), item(1_800_000_001, { key: "C2:1800000001" })];
+    const { poll, state, seen } = pollSetup(async () => items, notify as never);
+    state.set("slack.lastTs", "1800000000");
+    await expect(poll.pollOnce()).rejects.toThrow("down");
+    fail = false;
+    await poll.pollOnce();
+    expect(seen.has("slack", "C2:1800000001")).toBe(true);
+    expect(notify.mock.calls.filter(([n]) => (n as { dedupeKey: string }).dedupeKey.endsWith("C1:1800000001"))).toHaveLength(1);
+  });
+
+  it("looks up the owner lazily when startup could not, and tells the owner if the token is bad", async () => {
+    const findNew = vi.fn(async (_u: string, _s: number) => [] as SlackItem[]);
+    const whoAmI = vi.fn(async () => ({ userId: "U_LATE" }));
+    const db = openDb(":memory:");
+    const state = new ConnectorState(db);
+    state.set("slack.lastTs", "1800000000");
+    const notify = vi.fn(async () => ({}) as never);
+    const mk = (who: typeof whoAmI) =>
+      new SlackPoll({ client: { findNew, whoAmI: who }, seen: new SeenItems(db), state, notifier: { notify }, tz: "America/New_York", clock: () => new Date("2026-11-20T15:00:00Z") });
+    await mk(whoAmI).pollOnce();
+    expect(findNew).toHaveBeenCalledWith("U_LATE", expect.any(Number));
+
+    const bad = vi.fn(async () => {
+      throw new SlackAuthError();
+    });
+    expect(await mk(bad).pollOnce()).toBe(0);
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ dedupeKey: "slack-auth:2026-11-20", priority: "urgent" }));
   });
 });

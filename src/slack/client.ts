@@ -38,6 +38,7 @@ interface SlackMatch {
 
 const AUTH_ERRORS = new Set(["invalid_auth", "token_revoked", "not_authed", "account_inactive", "token_expired"]);
 const SEARCH_COUNT = "50";
+const MAX_PAGES = 4;
 
 function toItem(m: SlackMatch): SlackItem | null {
   if (!m.ts || !m.channel?.id) return null;
@@ -72,8 +73,8 @@ export class SlackClient {
 
   /** Direct messages and mentions newer than `sinceTs`, oldest first, excluding the owner's own messages. */
   async findNew(userId: string, sinceTs: number): Promise<SlackItem[]> {
-    const dms = await this.searchRaw("is:dm");
-    const mentions = await this.searchRaw(`<@${userId}>`);
+    const dms = await this.searchSince("is:dm", sinceTs);
+    const mentions = await this.searchSince(`<@${userId}>`, sinceTs);
     const byKey = new Map<string, SlackItem>();
     // Direct messages first so a message found by both searches is reported as a DM.
     for (const m of [...dms, ...mentions]) {
@@ -89,10 +90,28 @@ export class SlackClient {
     return matches.map(toItem).filter((i): i is SlackItem => i !== null);
   }
 
+  /** Newest first, following further pages until a page reaches messages older than `sinceTs` (or the page cap). */
+  private async searchSince(query: string, sinceTs: number): Promise<SlackMatch[]> {
+    const all: SlackMatch[] = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const { matches, pages } = await this.searchPage(query, SEARCH_COUNT, page);
+      all.push(...matches);
+      const oldest = matches.reduce((min, m) => Math.min(min, Number(m.ts ?? Infinity)), Infinity);
+      if (page >= pages || matches.length === 0 || oldest <= sinceTs) break;
+    }
+    return all;
+  }
+
   private async searchRaw(query: string, count = SEARCH_COUNT): Promise<SlackMatch[]> {
-    const body = await this.call("search.messages", { query, sort: "timestamp", sort_dir: "desc", count });
-    const matches = (body.messages as { matches?: SlackMatch[] } | undefined)?.matches;
-    return Array.isArray(matches) ? matches : [];
+    return (await this.searchPage(query, count, 1)).matches;
+  }
+
+  private async searchPage(query: string, count: string, page: number): Promise<{ matches: SlackMatch[]; pages: number }> {
+    const params: Record<string, string> = { query, sort: "timestamp", sort_dir: "desc", count };
+    if (page > 1) params.page = String(page);
+    const body = await this.call("search.messages", params);
+    const messages = body.messages as { matches?: SlackMatch[]; paging?: { pages?: number } } | undefined;
+    return { matches: Array.isArray(messages?.matches) ? messages.matches : [], pages: messages?.paging?.pages ?? 1 };
   }
 
   private async call(method: string, params: Record<string, string>): Promise<Record<string, unknown>> {

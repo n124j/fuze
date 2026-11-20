@@ -67,7 +67,9 @@ async function main(): Promise<void> {
       slack = { client, userId: (await client.whoAmI()).userId };
       console.log("Slack connected");
     } catch (err) {
-      console.log(`Slack is not connected: ${err instanceof Error ? err.message : "unknown error"} (see docs/slack-setup.md)`);
+      // Kept on: the first check retries the lookup (the network may not be up yet at login) and warns the owner if the token is bad.
+      slack = { client };
+      console.log(`Slack is not reachable yet: ${err instanceof Error ? err.message : "unknown error"} (will retry; see docs/slack-setup.md)`);
     }
   }
 
