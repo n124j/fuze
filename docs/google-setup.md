@@ -26,7 +26,8 @@ The sign-in is stored in `data/google-token.json` on your machine only.
 
 Fuse can count and search your mailbox (for example "how many unread emails do I have?" or "emails with attachments older than a year").
 It can also move emails to **Trash**, but only after you tap **Approve** on a message that shows the count and a few examples.
-Trashed mail stays in Gmail's Trash for 30 days, so you can restore it. Fuse never deletes mail permanently, and one approval covers at most 200 emails.
+Trashed mail stays in Gmail's Trash for 30 days, so you can restore it. Fuse never deletes mail permanently, and one approval covers at most 200 emails. After a full batch of 200 is moved, Fuse asks about the next batch separately, so a big clean-up is a series of approvals.
+Requests still waiting appear in the morning briefing.
 
 This needs the `gmail.modify` permission. If you connected Google before this feature existed, run `npm run google-auth` again and approve the new permission.
 If Fuse runs on another machine (for example the Mac), copy the new `data/google-token.json` there and restart Fuse.

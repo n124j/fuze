@@ -75,10 +75,13 @@ const DECISION_TEXT: Record<Decision, string> = {
     "I'm not sure whether that email went out. Please check your Gmail Sent folder. I will not try to send it again.",
 };
 
-const trashText = (decision: TrashDecision, count: number): string => {
+const trashText = (decision: TrashDecision, count: number, next?: { count: number } | null): string => {
   switch (decision) {
     case "trashed":
-      return `Moved ${count} emails to Trash. They stay there for 30 days, so you can restore them in Gmail.`;
+      return (
+        `Moved ${count} emails to Trash. They stay there for 30 days, so you can restore them in Gmail.` +
+        (next ? ` There are more: I'm asking about the next ${next.count} separately.` : "")
+      );
     case "rejected":
       return "Okay. Nothing was moved.";
     case "expired":
@@ -242,6 +245,7 @@ export function buildApp(deps: AppDeps): App {
               tasks: deps.google.tasks,
               reminders: deps.apple?.reminders,
               approvals: gate,
+              trashApprovals: trashGate,
               llm,
               budget,
               model: config.models.strong,
@@ -311,7 +315,7 @@ export function buildApp(deps: AppDeps): App {
         if (decision === "unknown-id" && trashGate) {
           // Not an email draft: it may be a request to move emails to Trash.
           const t = await trashGate.decide(m[2]!, verdict);
-          return trashText(t.decision, t.count);
+          return trashText(t.decision, t.count, t.next);
         }
         return DECISION_TEXT[decision];
       }

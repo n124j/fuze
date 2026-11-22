@@ -11,6 +11,7 @@ export type TrashDecision = "trashed" | "rejected" | "expired" | "already-decide
 
 interface Row {
   id: string;
+  query: string;
   ids_json: string;
   count: number;
   status: string;
@@ -53,8 +54,23 @@ export class TrashGate {
     return { id, count: ids.length };
   }
 
-  async decide(id: string, verdict: "approve" | "reject"): Promise<{ decision: TrashDecision; count: number }> {
-    const row = this.db.prepare("SELECT id, ids_json, count, status, expires_at FROM trash_requests WHERE id = ?").get(id) as Row | undefined;
+  /** Requests still waiting for the owner, oldest first. */
+  pending(): { id: string; summary: string }[] {
+    const rows = this.db
+      .prepare("SELECT id, query, count FROM trash_requests WHERE status = 'pending' AND expires_at > ? ORDER BY created_at")
+      .all(this.clock().getTime()) as { id: string; query: string; count: number }[];
+    return rows.map((r) => ({ id: r.id, summary: `Move ${r.count} emails to Trash (search: ${clean(r.query)})` }));
+  }
+
+  /**
+   * `next` is set only after a full batch was trashed: it is the follow-up request for what is left
+   * (null when nothing is left or the question could not be sent). The next batch needs its own approval.
+   */
+  async decide(
+    id: string,
+    verdict: "approve" | "reject",
+  ): Promise<{ decision: TrashDecision; count: number; next?: { id: string; count: number } | null }> {
+    const row = this.db.prepare("SELECT id, query, ids_json, count, status, expires_at FROM trash_requests WHERE id = ?").get(id) as Row | undefined;
     if (!row) return { decision: "unknown-id", count: 0 };
     if (row.status !== "pending") return { decision: "already-decided", count: row.count };
     const now = this.clock().getTime();
@@ -78,7 +94,10 @@ export class TrashGate {
       throw err;
     }
     this.setStatus(id, "trashed", now);
-    return { decision: "trashed", count: row.count };
+    if (row.count < MAX_TRASH_BATCH) return { decision: "trashed", count: row.count };
+    // A full batch means there may be more. The emails are already moved, so a failure here must not hide that.
+    const next = await this.request(row.query).catch(() => null);
+    return { decision: "trashed", count: row.count, next };
   }
 
   private setStatus(id: string, status: string, at: number): void {

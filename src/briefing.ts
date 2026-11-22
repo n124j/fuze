@@ -11,6 +11,8 @@ export interface BriefingDeps {
   /** Apple Reminders (Mac only); shown when due today or overdue. */
   reminders?: { listOpen(): Promise<TaskItem[]> };
   approvals: Pick<ApprovalGate, "pending">;
+  /** Requests to move emails to Trash that are still waiting for the owner. */
+  trashApprovals?: { pending(): { id: string; summary: string }[] };
   llm: LlmClient;
   budget: BudgetGuard;
   model: string;
@@ -87,7 +89,7 @@ export async function composeBriefing(deps: BriefingDeps, digest: string[]): Pro
     body = `Good morning.\n\n${plain}`;
   }
 
-  const pending = deps.approvals.pending();
+  const pending = [...deps.approvals.pending(), ...(deps.trashApprovals?.pending() ?? [])];
   const waiting =
     pending.length > 0
       ? "Waiting for your approval:\n" + pending.map((a) => `- ${a.summary} (reply /approve ${a.id} or /reject ${a.id})`).join("\n")

@@ -109,3 +109,59 @@ describe("TrashGate.decide", () => {
     expect((await gate.decide(id, "approve")).decision).toBe("trashed");
   });
 });
+
+describe("TrashGate.pending", () => {
+  it("lists requests still waiting, and drops decided or expired ones", async () => {
+    const a = (await gate.request("older_than:1y"))!;
+    const b = (await gate.request("has:attachment"))!;
+    await gate.decide(b.id, "reject");
+    expect(gate.pending()).toEqual([{ id: a.id, summary: "Move 7 emails to Trash (search: older_than:1y)" }]);
+    now = new Date(T0.getTime() + 25 * HOUR);
+    expect(gate.pending()).toEqual([]);
+  });
+});
+
+describe("TrashGate follow-up rounds", () => {
+  const full = () => Array.from({ length: 200 }, (_, i) => `m${i}`);
+
+  it("asks about the next batch right after a full batch is trashed", async () => {
+    ids = full();
+    const first = (await gate.request("older_than:5y"))!;
+    ids = Array.from({ length: 30 }, (_, i) => `n${i}`); // what is left afterwards
+    const res = await gate.decide(first.id, "approve");
+    expect(res.decision).toBe("trashed");
+    expect(res.next).toMatchObject({ count: 30 });
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(ask.mock.calls[1]![0]).toContain("Move 30 emails");
+    expect(trash).toHaveBeenCalledTimes(1); // the next batch still waits for its own approval
+    expect(status(res.next!.id)).toBe("pending");
+  });
+
+  it("does not ask again when nothing is left", async () => {
+    ids = full();
+    const first = (await gate.request("older_than:5y"))!;
+    ids = [];
+    const res = await gate.decide(first.id, "approve");
+    expect(res.next).toBeNull();
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not look for more after a short batch, or after a rejection", async () => {
+    const small = (await gate.request("q"))!;
+    await gate.decide(small.id, "approve");
+    ids = full();
+    const big = (await gate.request("q2"))!;
+    await gate.decide(big.id, "reject");
+    expect(listIds).toHaveBeenCalledTimes(2);
+  });
+
+  it("still reports the trashing as done when the follow-up question cannot be sent", async () => {
+    ids = full();
+    const first = (await gate.request("older_than:5y"))!;
+    ids = ["n1"];
+    ask.mockRejectedValueOnce(new Error("telegram down"));
+    const res = await gate.decide(first.id, "approve");
+    expect(res.decision).toBe("trashed");
+    expect(res.next).toBeNull();
+  });
+});

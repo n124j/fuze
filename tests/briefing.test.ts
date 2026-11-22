@@ -13,7 +13,7 @@ const reply = (text: string): LlmResponse => ({ content: [{ type: "text", text }
 const standup = { id: "e1", title: "Standup", start: new Date("2026-11-20T14:00:00Z"), end: new Date("2026-11-20T14:30:00Z"), allDay: false, updated: new Date(0) };
 const lunch = { id: "e2", title: "Lunch with Sam", start: new Date("2026-11-20T17:30:00Z"), end: new Date("2026-11-20T18:30:00Z"), allDay: false, location: "Cafe Roma", updated: new Date(0) };
 
-function setup(over: { events?: any[] | Error; tasks?: any[] | Error; approvals?: any[]; reminders?: any[] | Error; responses?: LlmResponse[]; capUsd?: number } = {}) {
+function setup(over: { events?: any[] | Error; tasks?: any[] | Error; approvals?: any[]; trash?: any[]; reminders?: any[] | Error; responses?: LlmResponse[]; capUsd?: number } = {}) {
   const db = openDb(":memory:");
   const budget = new BudgetGuard(db, over.capUsd ?? 1, "America/New_York", DEFAULT_PRICING, () => NOW);
   const llm = new ScriptedLlm(over.responses ?? [reply("Good morning. Here is your day.")]);
@@ -34,6 +34,7 @@ function setup(over: { events?: any[] | Error; tasks?: any[] | Error; approvals?
     calendar: { listBetween },
     tasks: { listOpen },
     approvals: { pending: () => over.approvals ?? [] },
+    ...(over.trash !== undefined ? { trashApprovals: { pending: () => over.trash! } } : {}),
     llm,
     budget,
     model: "claude-sonnet-5-5",
@@ -96,6 +97,16 @@ describe("composeBriefing", () => {
     const out = await composeBriefing(deps, []);
     expect(llm.calls).toHaveLength(0);
     expect(out).toContain("Waiting for your approval");
+    expect(out).not.toContain("Nothing needs your attention");
+  });
+
+  it("lists pending trash requests with the email approvals, without a model call", async () => {
+    const { deps, llm } = setup({ approvals, trash: [{ id: "tr9", summary: "Move 7 emails to Trash (search: older_than:1y)" }] });
+    const out = await composeBriefing(deps, []);
+    expect(llm.calls).toHaveLength(0);
+    expect(out).toContain("To: ann@x.com | Subject: Lunch");
+    expect(out).toContain("Move 7 emails to Trash (search: older_than:1y) (reply /approve tr9 or /reject tr9)");
+    expect(out.match(/Waiting for your approval/g)).toHaveLength(1);
     expect(out).not.toContain("Nothing needs your attention");
   });
 
