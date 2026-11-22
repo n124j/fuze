@@ -101,6 +101,18 @@ const MIGRATIONS: string[] = [
     decided_at INTEGER
   );
   `,
+  `
+  CREATE TABLE trash_requests (
+    id TEXT PRIMARY KEY,
+    query TEXT NOT NULL,
+    ids_json TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    decided_at INTEGER
+  );
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

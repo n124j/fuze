@@ -32,7 +32,7 @@ describe("openDb", () => {
         "approvals",
       ]),
     );
-    expect(SCHEMA_VERSION).toBe(2);
+    expect(SCHEMA_VERSION).toBe(3);
     expect(db.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
   });
 

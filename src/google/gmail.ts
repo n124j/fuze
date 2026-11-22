@@ -15,6 +15,15 @@ export interface MailItem {
   isBulk: boolean;
 }
 
+/** One line of a mailbox search: enough to recognise an email without reading it. */
+export interface MailSummary {
+  id: string;
+  from: string;
+  subject: string;
+  date: Date;
+  unread: boolean;
+}
+
 export interface DraftContent {
   to: string[];
   cc: string[];
@@ -176,6 +185,66 @@ export class GmailClient {
       }
     }
     return { items, historyId: latest };
+  }
+
+  /** Inbox totals straight from Gmail's label counters. */
+  async counts(): Promise<{ inboxTotal: number; inboxUnread: number }> {
+    const label = await this.http.json<{ messagesTotal?: number; messagesUnread?: number }>("GET", `${BASE}/labels/INBOX`);
+    return { inboxTotal: label.messagesTotal ?? 0, inboxUnread: label.messagesUnread ?? 0 };
+  }
+
+  /** Who, what and when for each id. A message deleted in the meantime is left out. */
+  async summaries(ids: string[]): Promise<MailSummary[]> {
+    const out: MailSummary[] = [];
+    for (const id of ids) {
+      try {
+        const m = await this.http.json<GmailMessage>("GET", `${BASE}/messages/${encodeURIComponent(id)}`, {
+          query: { format: "metadata", metadataHeaders: "From,Subject" },
+        });
+        out.push({
+          id: m.id,
+          from: headerOf(m.payload?.headers, "From"),
+          subject: headerOf(m.payload?.headers, "Subject"),
+          date: new Date(Number(m.internalDate ?? 0)),
+          unread: (m.labelIds ?? []).includes("UNREAD"),
+        });
+      } catch (err) {
+        if (!(err instanceof GoogleApiError && err.status === 404)) throw err;
+      }
+    }
+    return out;
+  }
+
+  /** Search the mailbox with Gmail's own query syntax. `exact` is false when Gmail only estimated the total. */
+  async search(query: string, limit = 20): Promise<{ total: number; exact: boolean; items: MailSummary[] }> {
+    const page = await this.http.json<{ messages?: { id: string }[]; nextPageToken?: string; resultSizeEstimate?: number }>(
+      "GET",
+      `${BASE}/messages`,
+      { query: { q: query, maxResults: String(limit) } },
+    );
+    const ids = (page.messages ?? []).map((m) => m.id);
+    const exact = !page.nextPageToken;
+    return { total: exact ? ids.length : (page.resultSizeEstimate ?? ids.length), exact, items: await this.summaries(ids) };
+  }
+
+  /** Ids of messages matching `query`, newest first, up to `max`. `more` is true when there were others. */
+  async listIds(query: string, max: number): Promise<{ ids: string[]; more: boolean }> {
+    const found: string[] = [];
+    let pageToken: string | undefined;
+    do {
+      const q: Record<string, string> = { q: query, maxResults: String(Math.min(500, max - found.length + 1)) };
+      if (pageToken) q.pageToken = pageToken;
+      const page = await this.http.json<{ messages?: { id: string }[]; nextPageToken?: string }>("GET", `${BASE}/messages`, { query: q });
+      found.push(...(page.messages ?? []).map((m) => m.id));
+      pageToken = page.nextPageToken;
+    } while (pageToken && found.length <= max);
+    return { ids: found.slice(0, max), more: found.length > max || pageToken !== undefined };
+  }
+
+  /** Move messages to Trash (Gmail keeps them there for 30 days). Adding the label twice is harmless. */
+  async trash(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.http.json("POST", `${BASE}/messages/batchModify`, { body: { ids, addLabelIds: ["TRASH"], removeLabelIds: ["INBOX"] } });
   }
 
   async readMessage(id: string, maxChars = 4000): Promise<string> {

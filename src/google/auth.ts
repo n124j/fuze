@@ -8,6 +8,8 @@ export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/tasks",
   "https://www.googleapis.com/auth/drive.readonly",
+  // Needed to move mail to Trash. Never used to delete permanently, and only after the owner approves.
+  "https://www.googleapis.com/auth/gmail.modify",
 ];
 
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";

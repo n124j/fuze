@@ -21,3 +21,12 @@ You do this once. It takes about 10 minutes.
 
 Fuse asks for permission to read mail, save drafts, send mail (only after you tap Approve in Telegram), manage calendar events and tasks, and read Drive files.
 The sign-in is stored in `data/google-token.json` on your machine only.
+
+## Searching, counting and cleaning up mail
+
+Fuse can count and search your mailbox (for example "how many unread emails do I have?" or "emails with attachments older than a year").
+It can also move emails to **Trash**, but only after you tap **Approve** on a message that shows the count and a few examples.
+Trashed mail stays in Gmail's Trash for 30 days, so you can restore it. Fuse never deletes mail permanently, and one approval covers at most 200 emails.
+
+This needs the `gmail.modify` permission. If you connected Google before this feature existed, run `npm run google-auth` again and approve the new permission.
+If Fuse runs on another machine (for example the Mac), copy the new `data/google-token.json` there and restart Fuse.

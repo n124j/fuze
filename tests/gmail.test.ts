@@ -212,3 +212,82 @@ describe("SeenItems and ConnectorState", () => {
     expect(state.get("gmail.historyId")).toBe("11");
   });
 });
+
+describe("GmailClient search, counts and trash", () => {
+  const meta = (id: string, h: Record<string, string>, labels: string[] = ["INBOX"]) => ({
+    id,
+    threadId: id,
+    labelIds: labels,
+    internalDate: "1700000000000",
+    payload: { headers: headers(h) },
+  });
+
+  it("reads the inbox totals from the INBOX label", async () => {
+    const { http, json } = fakeHttp(() => ({ messagesTotal: 1200, messagesUnread: 37 }));
+    expect(await new GmailClient(http).counts()).toEqual({ inboxTotal: 1200, inboxUnread: 37 });
+    expect(json.mock.calls[0]![1]).toContain("/labels/INBOX");
+  });
+
+  it("searches with Gmail's own query and summarises each hit", async () => {
+    const { http, json } = fakeHttp((_m, url) => {
+      if (url.endsWith("/messages")) return { messages: [{ id: "a" }, { id: "b" }], resultSizeEstimate: 2 };
+      const id = url.split("/messages/")[1]!;
+      return id === "a"
+        ? meta("a", { From: "Ann <ann@x.com>", Subject: "Invoice" }, ["INBOX", "UNREAD"])
+        : meta("b", { From: "Bob <bob@x.com>", Subject: "Hello" });
+    });
+    const res = await new GmailClient(http).search("is:unread has:attachment", 20);
+    const list = json.mock.calls[0]!;
+    expect(list[2]!.query).toMatchObject({ q: "is:unread has:attachment", maxResults: "20" });
+    expect(res.total).toBe(2);
+    expect(res.exact).toBe(true);
+    expect(res.items.map((i) => [i.id, i.unread, i.subject])).toEqual([
+      ["a", true, "Invoice"],
+      ["b", false, "Hello"],
+    ]);
+  });
+
+  it("reports an estimate when Gmail has more pages", async () => {
+    const { http } = fakeHttp((_m, url) =>
+      url.endsWith("/messages") ? { messages: [{ id: "a" }], resultSizeEstimate: 840, nextPageToken: "p2" } : meta("a", { From: "x@y.z", Subject: "s" }),
+    );
+    const res = await new GmailClient(http).search("older_than:1y", 1);
+    expect(res).toMatchObject({ total: 840, exact: false });
+  });
+
+  it("returns nothing for a search with no hits", async () => {
+    const { http } = fakeHttp(() => ({ resultSizeEstimate: 0 }));
+    expect(await new GmailClient(http).search("from:nobody")).toEqual({ total: 0, exact: true, items: [] });
+  });
+
+  it("lists ids across pages up to the maximum and says when there are more", async () => {
+    const pages: Record<string, { messages: { id: string }[]; nextPageToken?: string }> = {
+      "": { messages: [{ id: "1" }, { id: "2" }, { id: "3" }], nextPageToken: "p2" },
+      p2: { messages: [{ id: "4" }, { id: "5" }, { id: "6" }], nextPageToken: "p3" },
+    };
+    const { http } = fakeHttp((_m, _u, opts) => pages[opts?.query?.pageToken ?? ""]);
+    const res = await new GmailClient(http).listIds("q", 5);
+    expect(res).toEqual({ ids: ["1", "2", "3", "4", "5"], more: true });
+  });
+
+  it("moves messages to Trash with one batch call, and does nothing for an empty list", async () => {
+    const { http, json } = fakeHttp(() => undefined);
+    const gmail = new GmailClient(http);
+    await gmail.trash([]);
+    expect(json).not.toHaveBeenCalled();
+    await gmail.trash(["a", "b"]);
+    const [method, url, opts] = json.mock.calls[0]!;
+    expect(method).toBe("POST");
+    expect(url).toContain("/messages/batchModify");
+    expect(opts!.body).toEqual({ ids: ["a", "b"], addLabelIds: ["TRASH"], removeLabelIds: ["INBOX"] });
+  });
+
+  it("skips a message that vanished while summarising", async () => {
+    const { http } = fakeHttp((_m, url) => {
+      if (url.endsWith("/a")) throw new GoogleApiError("gone", 404);
+      return meta("b", { From: "x@y.z", Subject: "kept" });
+    });
+    const out = await new GmailClient(http).summaries(["a", "b"]);
+    expect(out.map((s) => s.id)).toEqual(["b"]);
+  });
+});

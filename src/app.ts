@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { ApprovalGate, type Decision } from "./approvals/gate.js";
+import { TrashGate, type TrashDecision } from "./approvals/trash-gate.js";
 import { registerAppleTools } from "./apple/tools.js";
 import type { RemindersClient } from "./apple/reminders.js";
 import { composeBriefing } from "./briefing.js";
@@ -49,7 +50,7 @@ export interface AppDeps {
   extraHandlers?: Record<string, Handler>;
   /** Google connectors. Without them Fuse still chats, remembers and sends briefings, with less in them. */
   google?: {
-    gmail: Pick<GmailClient, "readMessage" | "createDraft" | "getDraft" | "sendDraft" | "currentHistoryId" | "newMessagesSince">;
+    gmail: Pick<GmailClient, "readMessage" | "createDraft" | "getDraft" | "sendDraft" | "currentHistoryId" | "newMessagesSince" | "counts" | "search" | "listIds" | "summaries" | "trash">;
     calendar: Pick<CalendarClient, "listBetween" | "createEvent">;
     tasks: Pick<TasksClient, "listOpen" | "create">;
     drive: Pick<DriveClient, "search" | "readText">;
@@ -72,6 +73,21 @@ const DECISION_TEXT: Record<Decision, string> = {
   "unknown-id": "I don't recognize that request.",
   "send-unconfirmed":
     "I'm not sure whether that email went out. Please check your Gmail Sent folder. I will not try to send it again.",
+};
+
+const trashText = (decision: TrashDecision, count: number): string => {
+  switch (decision) {
+    case "trashed":
+      return `Moved ${count} emails to Trash. They stay there for 30 days, so you can restore them in Gmail.`;
+    case "rejected":
+      return "Okay. Nothing was moved.";
+    case "expired":
+      return "That request expired after 24 hours, so nothing was moved. Ask me again if you still want it.";
+    case "already-decided":
+      return "That one was already handled.";
+    case "unknown-id":
+      return "I don't recognize that request.";
+  }
 };
 
 export interface App {
@@ -142,6 +158,7 @@ export function buildApp(deps: AppDeps): App {
   const notifier = new Notifier(db, sendToOwner, config, clock);
 
   let gate: ApprovalGate | undefined;
+  let trashGate: TrashGate | undefined;
   let calendar: CalendarPort | undefined;
   const pollSources: PollSource[] = [];
   if (deps.google) {
@@ -164,7 +181,8 @@ export function buildApp(deps: AppDeps): App {
       throw new Error("no owner is paired on any channel");
     };
     gate = new ApprovalGate(db, g.gmail, askOwner, clock);
-    registerGoogleTools(tools, { ...g, calendar, gate, tz });
+    trashGate = new TrashGate(db, g.gmail, askOwner, clock);
+    registerGoogleTools(tools, { ...g, calendar, gate, trashGate, tz });
     const poll = new PollService({
       gmail: g.gmail,
       calendar,
@@ -288,7 +306,14 @@ export function buildApp(deps: AppDeps): App {
     ? async (action: InboundAction): Promise<string> => {
         const m = /^(approve|reject):([A-Za-z0-9]+)$/.exec(action.actionId);
         if (!m) return "";
-        return DECISION_TEXT[await gate!.decide(m[2]!, m[1] as "approve" | "reject")];
+        const verdict = m[1] as "approve" | "reject";
+        const decision = await gate!.decide(m[2]!, verdict);
+        if (decision === "unknown-id" && trashGate) {
+          // Not an email draft: it may be a request to move emails to Trash.
+          const t = await trashGate.decide(m[2]!, verdict);
+          return trashText(t.decision, t.count);
+        }
+        return DECISION_TEXT[decision];
       }
     : undefined;
   const gateway = new Gateway({ owners, adapters, respond, db, onAction });

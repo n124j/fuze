@@ -235,6 +235,11 @@ function fakeGoogle() {
       sendDraft: vi.fn(async () => ({ messageId: "m-sent" })),
       currentHistoryId: vi.fn(async () => "100"),
       newMessagesSince: vi.fn(async () => ({ items: [] as any[], historyId: "100" })),
+      counts: vi.fn(async () => ({ inboxTotal: 10, inboxUnread: 2 })),
+      search: vi.fn(async () => ({ total: 0, exact: true, items: [] as any[] })),
+      listIds: vi.fn(async () => ({ ids: ["m1", "m2"], more: false })),
+      summaries: vi.fn(async (ids: string[]) => ids.map((id) => ({ id, from: "Ann <ann@x.com>", subject: `Old ${id}`, date: DAY, unread: false }))),
+      trash: vi.fn(async (_ids: string[]) => {}),
     },
     calendar: { listBetween: vi.fn(async () => [] as any[]), createEvent: vi.fn() },
     tasks: { listOpen: vi.fn(async () => [] as any[]), create: vi.fn() },
@@ -291,6 +296,20 @@ describe("google: drafts and approval", () => {
     expect(adapter.sent.at(-1)!.text).toBe("Sent.");
     await adapter.tap(approve);
     expect(google.gmail.sendDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves emails to Trash only after the owner taps Approve", async () => {
+    const google = fakeGoogle();
+    const { adapter } = await setup([toolUse("email_request_trash", { query: "older_than:1y" }), reply("Asked you")], {}, {}, google);
+    await adapter.emit(from("42", "clean out old mail"));
+    expect(adapter.withActions[0]!.text).toContain("Move 2 emails to Trash");
+    expect(google.gmail.trash).not.toHaveBeenCalled();
+    const approve = adapter.withActions[0]!.actions[0]!.id;
+    await adapter.tap(approve);
+    expect(google.gmail.trash).toHaveBeenCalledWith(["m1", "m2"]);
+    expect(adapter.sent.at(-1)!.text).toContain("Moved 2 emails to Trash");
+    await adapter.tap(approve);
+    expect(google.gmail.trash).toHaveBeenCalledTimes(1);
   });
 
   it("does nothing when a stranger taps Approve", async () => {
